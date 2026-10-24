@@ -1,0 +1,43 @@
+rules_version = '2';
+// Правила доступу до бази. Скопіюйте весь цей текст у Firebase → Firestore Database → Rules → Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function email() { return request.auth != null ? request.auth.token.email : ''; }
+    function isDirector() { return email() == 'director@zadachi.example'; }
+    function dept() {
+      return email() == 'vyrobnytstvo@zadachi.example' ? 'vyrobnytstvo'
+           : email() == 'administratsiia@zadachi.example' ? 'administratsiia' : '';
+    }
+    function isStaff() { return isDirector() || dept() != ''; }
+
+    // Ключі шифрування (самі по собі зашифровані паролями). Змінює лише директор.
+    match /settings/vault {
+      allow read: if isStaff();
+      allow write: if isDirector();
+    }
+
+    // Задачі: підрозділ бачить лише задачі, де він бере участь,
+    // і може змінювати лише звіти (поле rep), а не саму задачу.
+    match /tasks/{taskId} {
+      allow read: if isDirector() || (dept() != '' && dept() in resource.data.depts);
+      allow create, delete: if isDirector();
+      allow update: if isDirector()
+        || (dept() != '' && dept() in resource.data.depts
+            && request.resource.data.depts == resource.data.depts
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rep', 'updatedAt', 'updatedBy']));
+    }
+
+    // Плани та довідник працівників: підрозділ читає лише свій, змінює директор.
+    match /plans/{d} {
+      allow read: if isDirector() || d == dept();
+      allow write: if isDirector();
+    }
+    match /staff/{d} {
+      allow read: if isDirector() || d == dept();
+      allow write: if isDirector();
+    }
+
+    // Усе інше закрито.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

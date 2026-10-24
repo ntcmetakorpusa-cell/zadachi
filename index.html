@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#2c5aa0">
+<meta name="robots" content="noindex,nofollow">
+<title>Задачі підприємства</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Layout: вхід за роллю / перше налаштування → шапка з роллю → план підрозділу → смуга підсумків → фільтри → вид → питання до директора */
+:root{
+  --bg:#eef1f4; --surface:#ffffff; --surface-2:#f5f7f9; --line:#d6dce3; --line-strong:#bcc5cf;
+  --fg:#18202a; --muted:#5b6774;
+  --accent:#2c5aa0; --accent-ink:#ffffff; --accent-soft:#e3ebf7;
+  --todo:#5f6b78; --todo-bg:#eceff2;
+  --doing:#9a5e08; --doing-bg:#fbefd9;
+  --done:#2a7548; --done-bg:#dff1e6;
+  --issue:#b3261e; --issue-bg:#fbe3e1;
+  --shadow:0 1px 2px rgba(20,30,45,.06),0 8px 24px rgba(20,30,45,.08);
+  --font-display:"Unbounded","Manrope",system-ui,sans-serif;
+  --font-body:"Manrope",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151b; --surface:#18202a; --surface-2:#1d2631; --line:#2b3644; --line-strong:#3a4757;
+    --fg:#e6ebf0; --muted:#97a3b0;
+    --accent:#86abe8; --accent-ink:#0d1520; --accent-soft:#1f2f47;
+    --todo:#a3adb8; --todo-bg:#25303b;
+    --doing:#e8b562; --doing-bg:#3a2d16;
+    --done:#71c893; --done-bg:#173224;
+    --issue:#f28b81; --issue-bg:#3e1c1a;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151b; --surface:#18202a; --surface-2:#1d2631; --line:#2b3644; --line-strong:#3a4757;
+  --fg:#e6ebf0; --muted:#97a3b0;
+  --accent:#86abe8; --accent-ink:#0d1520; --accent-soft:#1f2f47;
+  --todo:#a3adb8; --todo-bg:#25303b;
+  --doing:#e8b562; --doing-bg:#3a2d16;
+  --done:#71c893; --done-bg:#173224;
+  --issue:#f28b81; --issue-bg:#3e1c1a;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+[hidden]{display:none!important}
+img{max-width:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:14px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.6}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+/* login */
+.login{max-width:720px;margin:6vh auto 0;display:flex;flex-direction:column;gap:22px}
+.login h1{text-align:left}
+.login p{margin:0;color:var(--muted);max-width:60ch}
+.roles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.role{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:left;display:flex;flex-direction:column;gap:8px;min-height:120px}
+.role:hover{border-color:var(--line-strong)}
+.role[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.role .ic{width:34px;height:34px;border-radius:9px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center}
+.role .ic svg{width:19px;height:19px}
+.role b{font-family:var(--font-display);font-weight:500;font-size:15px}
+.role span{font-size:12.5px;color:var(--muted)}
+.pwbox{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow)}
+.pwrow{display:flex;gap:8px;flex-wrap:wrap}
+.pwrow .field{flex:1 1 220px}
+.remember{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+.remember input{width:16px;height:16px;accent-color:var(--accent)}
+.err{color:var(--issue);font-weight:600;font-size:13px;min-height:1.2em}
+
+/* header */
+.head{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between}
+.head-l{display:flex;flex-direction:column;gap:6px;min-width:0}
+.eyebrow{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.who{display:inline-flex;align-items:center;gap:6px;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:2px 10px;letter-spacing:.04em}
+h1{font-family:var(--font-display);font-weight:700;font-size:clamp(22px,3.4vw,30px);line-height:1.15;margin:0;text-wrap:balance}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-strong);background:var(--surface);border-radius:8px;padding:8px 13px;font-weight:600;font-size:13.5px}
+.btn:hover:not(:disabled){border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.primary:hover:not(:disabled){filter:brightness(1.08)}
+.btn.danger{color:var(--issue);border-color:var(--issue)}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn svg{width:16px;height:16px;flex:none}
+
+.depts{display:flex;gap:4px;border-bottom:1px solid var(--line);overflow-x:auto}
+.dept{border:0;background:none;padding:10px 14px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;display:flex;gap:8px;align-items:center}
+.dept[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.dept .cnt{font-family:var(--font-mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:0 7px;color:var(--muted)}
+
+/* plans */
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.plan{padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.plan-h{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.plan-h h2{margin:0;font-family:var(--font-display);font-size:14px;font-weight:500}
+.plan-h .m{font-size:12px;color:var(--muted)}
+.plan-text{white-space:pre-wrap;margin:0;max-width:75ch}
+.plan textarea{width:100%;min-height:90px;resize:vertical}
+.plan .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.plan input.field{flex:1 1 180px}
+
+/* summary */
+.summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:left;display:flex;flex-direction:column;gap:2px}
+.stat:hover{border-color:var(--line-strong)}
+.stat[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.stat .lbl{font-size:12px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:6px}
+.stat .val{font-family:var(--font-mono);font-size:24px;font-weight:500}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.progress{grid-column:1/-1;display:flex;flex-direction:column;gap:6px}
+.bar{display:flex;height:8px;border-radius:999px;overflow:hidden;background:var(--todo-bg)}
+.bar span{display:block;height:100%}
+.progress .meta{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);gap:12px;flex-wrap:wrap}
+
+/* toolbar */
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.field{background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;min-width:0}
+.search{flex:1 1 220px}
+.toolbar select.field{flex:0 1 auto;max-width:100%}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:8px;overflow:hidden;background:var(--surface);margin-left:auto}
+.seg button{border:0;background:none;padding:8px 12px;font-weight:600;font-size:13px;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--fg)}
+.linkbtn{border:0;background:none;color:var(--accent);font-weight:600;padding:6px 4px}
+
+/* chips */
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 10px 3px 8px;font-size:12.5px;font-weight:600;white-space:nowrap;border:1px solid transparent}
+.st-todo{background:var(--todo-bg);color:var(--todo)} .st-todo .dot{background:var(--todo)}
+.st-doing{background:var(--doing-bg);color:var(--doing)} .st-doing .dot{background:var(--doing)}
+.st-done{background:var(--done-bg);color:var(--done)} .st-done .dot{background:var(--done)}
+.st-issue{background:var(--issue-bg);color:var(--issue)} .st-issue .dot{background:var(--issue)}
+select.pill{appearance:none;-webkit-appearance:none;padding-right:22px;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 12px) 52%,calc(100% - 8px) 52%;background-size:4px 4px;background-repeat:no-repeat}
+select.pill:disabled{cursor:default;opacity:1;background-image:none;padding-right:10px}
+select.pill option{color:var(--fg);background:var(--surface)}
+.prio{font-size:12px;font-weight:700;letter-spacing:.02em;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.prio i{display:inline-flex;gap:2px}
+.prio i b{width:4px;height:12px;border-radius:1px;background:var(--line-strong);display:block}
+.p-high i b{background:var(--issue)} .p-med i b:nth-child(-n+2){background:var(--doing)} .p-low i b:first-child{background:var(--todo)}
+.p-high{color:var(--issue)} .p-med{color:var(--doing)} .p-low{color:var(--todo)}
+select.prio-sel{border:1px solid transparent;background:transparent;border-radius:6px;padding:3px 4px;font-size:12.5px;font-weight:700}
+select.prio-sel:hover{border-color:var(--line)}
+.repeat{font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-soft);border-radius:4px;padding:1px 6px;white-space:nowrap}
+.dtag{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:1px 6px;white-space:nowrap}
+
+/* table */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.tablewrap{overflow-x:auto;border-radius:12px}
+table{width:100%;border-collapse:collapse;min-width:960px}
+th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+td{padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr.group td{background:var(--surface-2);font-family:var(--font-display);font-size:12.5px;font-weight:500;padding:9px 12px}
+tr.group .gmeta{font-family:var(--font-body);font-size:12px;color:var(--muted);font-weight:500;margin-left:8px}
+tr.row:hover td{background:color-mix(in srgb,var(--accent-soft) 35%,transparent)}
+.title-btn{border:0;background:none;padding:0;text-align:left;font-weight:600;line-height:1.4}
+.title-btn:hover{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+.upd{display:block;font-size:11.5px;color:var(--muted);margin-top:3px}
+.cell-in{width:100%;border:1px solid transparent;background:transparent;border-radius:6px;padding:4px 6px;min-width:0}
+.cell-in:hover:not(:disabled){border-color:var(--line)}
+.cell-in:focus{border-color:var(--accent);background:var(--surface)}
+.cell-in:disabled{opacity:1}
+textarea.cell-in{resize:vertical;min-height:30px;line-height:1.4}
+input[type="date"].cell-in{font-family:var(--font-mono);font-size:12.5px;width:132px}
+.overdue{color:var(--issue)!important;font-weight:600}
+.col-title{width:28%} .col-due{width:140px} .col-prio{width:120px} .col-st{width:140px}
+
+/* board */
+.board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.col{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:160px}
+.col.drop{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.col-h{display:flex;justify-content:space-between;align-items:center;padding:2px 4px 4px}
+.col-h .n{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:10px 11px;display:flex;flex-direction:column;gap:7px}
+.card[draggable="true"]{cursor:grab}
+.card.dragging{opacity:.5}
+.card .blk{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;display:flex;gap:6px;flex-wrap:wrap}
+.card .ft{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.card .owner{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* owners */
+.owners{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+.owner-card{padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.owner-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.owner-h h3{margin:0;font-family:var(--font-display);font-size:14px;font-weight:500}
+.owner-h .m{font-size:12px;color:var(--muted);white-space:nowrap}
+.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.olist li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;padding:8px 0;border-top:1px solid var(--line);align-items:start}
+.olist li:first-child{border-top:0}
+.olist .sub{grid-column:1/2;font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
+
+/* director block */
+.director{padding:16px 18px;display:flex;flex-direction:column;gap:10px;border-left:4px solid var(--issue)}
+.director h2{margin:0;font-family:var(--font-display);font-size:15px;font-weight:500}
+.director p{margin:0;color:var(--muted);max-width:68ch}
+.director ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.director li{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.director li .c{color:var(--muted);font-size:13px}
+
+.empty{padding:40px 20px;text-align:center;color:var(--muted);display:flex;flex-direction:column;gap:8px;align-items:center}
+.empty strong{color:var(--fg);font-size:15px}
+.note{font-size:12.5px;color:var(--muted);margin:0}
+.banner{background:var(--doing-bg);color:var(--doing);border-radius:8px;padding:9px 12px;font-weight:600;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+
+/* dialogs */
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--fg);padding:0;width:min(720px,calc(100vw - 32px));box-shadow:var(--shadow)}
+dialog::backdrop{background:rgba(10,15,22,.45)}
+.dlg{padding:20px;display:flex;flex-direction:column;gap:14px}
+.dlg h2{margin:0;font-family:var(--font-display);font-size:17px;font-weight:500}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.fl{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fl label{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.02em}
+.fl .field{width:100%}
+.fl .field:disabled{opacity:.75}
+.dlg-f{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;align-items:center}
+.dlg-f .r{display:flex;gap:8px;margin-left:auto}
+.confirm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-weight:600;color:var(--issue)}
+.pwset{display:flex;flex-direction:column;gap:12px}
+.pwitem{border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.pwitem-h{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.pwitem-h b{font-weight:700}
+.tag-def{font-size:11.5px;font-weight:700;color:var(--doing);background:var(--doing-bg);border-radius:4px;padding:1px 7px}
+.tag-ok{font-size:11.5px;font-weight:700;color:var(--done);background:var(--done-bg);border-radius:4px;padding:1px 7px}
+
+
+/* assignees */
+.asg{display:flex;flex-direction:column;gap:4px;padding:8px 0;border-top:1px dashed var(--line)}
+.asg:first-child{border-top:0;padding-top:0}
+.asg:last-child{padding-bottom:0}
+.asg-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:space-between}
+.asg-who{font-size:13px;min-width:0}
+.asg-who b{font-weight:700}
+.asg-note{font-size:13px;white-space:pre-wrap;color:var(--fg)}
+select.pill.sm{font-size:12px;padding:2px 20px 2px 8px}
+select.pill.sm:disabled{padding-right:8px}
+.dnote{display:block;font-size:12.5px;color:var(--muted);margin-top:4px;font-style:italic}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;gap:6px;align-items:center;font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:2px 9px;max-width:100%;min-width:0}
+.asg-list{display:flex;flex-direction:column;gap:8px}
+.asg-row{display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1.3fr) auto;gap:8px;align-items:center}
+.asg-row .a-del{padding:6px 10px;color:var(--muted)}
+.reps{display:flex;flex-direction:column;gap:10px}
+.rep{border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:var(--surface-2)}
+.rep textarea{width:100%;resize:vertical}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.core-edit{display:flex;flex-direction:column;gap:12px}
+.core-read{display:flex;flex-direction:column;gap:8px}
+.read-title{font-weight:700;font-size:15.5px;line-height:1.4}
+.read-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.col-asg{width:44%}
+@media (max-width:600px){
+  .asg-row{grid-template-columns:minmax(0,1fr) auto}
+  .asg-row .a-dept{grid-column:1}
+  .asg-row .a-del{grid-column:2;grid-row:1}
+  .asg-row .a-pos,.asg-row .a-name{grid-column:1/-1}
+  .grid3{grid-template-columns:1fr 1fr}
+}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13.5px;box-shadow:var(--shadow);z-index:50;max-width:calc(100vw - 32px)}
+
+@media (max-width:900px){
+  .summary{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .board{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:600px){
+  .roles{grid-template-columns:minmax(0,1fr)}
+  .role{min-height:0}
+  .summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .board{grid-template-columns:minmax(0,1fr)}
+  .owners{grid-template-columns:minmax(0,1fr)}
+  .seg{margin-left:0}
+  .grid2{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+.setup{max-width:620px}
+.setup .pwbox .fl{gap:6px}
+.cfg{background:var(--issue-bg);color:var(--issue);border-radius:10px;padding:12px 14px;font-weight:600}
+</style>
+</head>
+<body>
+
+
+<!-- ============ LOGIN ============ -->
+<section class="login" id="loginScreen">
+  <div class="head-l">
+    <div class="eyebrow">Металообробка · закритий доступ</div>
+    <h1>Задачі виробництва</h1>
+  </div>
+  <p>Оберіть свій розділ і введіть пароль. Пароль видає директор. Усі задачі зашифровані: без правильного пароля їх неможливо прочитати.</p>
+  <div class="cfg" id="cfgMsg" hidden>Сайт ще не підключено до бази даних. Вставте налаштування Firebase у файл config.js (див. інструкцію).</div>
+  <div class="roles" id="roleTiles" role="group" aria-label="Розділ"></div>
+  <form class="pwbox" id="loginForm" autocomplete="off">
+    <label for="pw" id="pwLabel" style="font-weight:700">Пароль</label>
+    <div class="pwrow">
+      <input class="field" id="pw" type="password" autocomplete="current-password" placeholder="Спочатку оберіть розділ" disabled>
+      <button class="btn primary" type="submit" id="loginBtn" disabled>Увійти</button>
+    </div>
+    <label class="remember" for="remember"><input type="checkbox" id="remember"> Запам'ятати на цьому пристрої (лише особистий телефон чи комп'ютер)</label>
+    <div class="err" id="loginErr" role="alert"></div>
+  </form>
+</section>
+
+
+<!-- ============ FIRST SETUP ============ -->
+<section class="login setup" id="setupScreen" hidden>
+  <div class="head-l">
+    <div class="eyebrow">Перше налаштування · один раз</div>
+    <h1>Налаштування доступу</h1>
+  </div>
+  <p>Введіть паролі розділів «Виробництво» та «Адміністрація», які ви створили у Firebase. З них і з вашого пароля директора буде створено ключі шифрування.</p>
+  <form class="pwbox" id="setupForm" autocomplete="off">
+    <div class="fl"><label for="sV">Пароль розділу «Виробництво»</label><input class="field" id="sV" type="password" autocomplete="off"></div>
+    <div class="fl"><label for="sA">Пароль розділу «Адміністрація»</label><input class="field" id="sA" type="password" autocomplete="off"></div>
+    <label class="remember" for="sSeed"><input type="checkbox" id="sSeed" checked> Додати 24 стартові задачі виробництва (шаблон, можна змінити чи видалити)</label>
+    <div class="pwrow"><button class="btn primary" type="submit" id="setupBtn">Завершити налаштування</button><button class="btn ghost" type="button" id="setupCancel">Скасувати</button></div>
+    <div class="err" id="setupErr" role="alert"></div>
+  </form>
+</section>
+
+<!-- ============ APP ============ -->
+<div class="wrap" id="app" hidden>
+  <header class="head">
+    <div class="head-l">
+      <div class="eyebrow">Металообробка <span class="who" id="whoBadge"></span></div>
+      <h1 id="appTitle">Задачі виробництва</h1>
+    </div>
+    <div class="actions">
+      <button class="btn" id="copyBtn" type="button" title="Скопіювати таблицю, щоб вставити в Google Таблиці або Excel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        Копіювати для Google Таблиць
+      </button>
+      <button class="btn" id="csvBtn" type="button" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+        CSV
+      </button>
+      <button class="btn" id="settingsBtn" type="button" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        Паролі
+      </button>
+      <button class="btn primary" id="addBtn" type="button" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        Нова задача
+      </button>
+      <button class="btn ghost" id="logoutBtn" type="button">Вийти</button>
+    </div>
+  </header>
+
+  <nav class="depts" id="depts" role="tablist" aria-label="Підрозділи" hidden></nav>
+  <div id="banner" class="banner" hidden></div>
+  <section class="plans" id="plans" aria-label="Плани підрозділів"></section>
+  <section class="summary" id="summary" aria-label="Підсумок"></section>
+
+  <div class="toolbar">
+    <input class="field search" id="q" type="search" placeholder="Пошук задачі, відповідального, коментаря" aria-label="Пошук">
+    <select class="field" id="fBlock" aria-label="Блок"></select>
+    <select class="field" id="fOwner" aria-label="Відповідальний"></select>
+    <select class="field" id="fPrio" aria-label="Пріоритет">
+      <option value="">Усі пріоритети</option>
+      <option value="high">Високий</option>
+      <option value="med">Середній</option>
+      <option value="low">Низький</option>
+    </select>
+    <button class="linkbtn" id="clearF" type="button" hidden>Скинути фільтри</button>
+    <div class="seg" role="group" aria-label="Вигляд">
+      <button type="button" data-view="table" aria-pressed="true">Таблиця</button>
+      <button type="button" data-view="board" aria-pressed="false">Дошка</button>
+      <button type="button" data-view="owners" aria-pressed="false">Для наради</button>
+    </div>
+  </div>
+
+  <main id="view"></main>
+  <section class="panel director" id="director" aria-label="Питання до директора"></section>
+  <p class="note" id="footNote"></p>
+</div>
+
+<!-- task dialog -->
+<dialog id="dlg" aria-labelledby="dlgTitle">
+  <form class="dlg" id="form" method="dialog">
+    <h2 id="dlgTitle">Нова задача</h2>
+    <div id="coreRead" class="core-read" hidden></div>
+    <div id="coreEdit" class="core-edit">
+      <div class="fl"><label for="iTitle">Задача</label><textarea class="field" id="iTitle" rows="2" placeholder="Напр., Ремонт або продаж верстата 16К20"></textarea></div>
+      <div class="grid3">
+        <div class="fl"><label for="iDept">Основний підрозділ</label><select class="field" id="iDept"></select></div>
+        <div class="fl"><label for="iBlock">Блок</label><input class="field" id="iBlock" list="blockList" placeholder="Напр., Обладнання"></div>
+        <div class="fl"><label for="iDue">Термін</label><input class="field mono" id="iDue" type="date"></div>
+        <div class="fl"><label for="iPrio">Пріоритет</label><select class="field" id="iPrio"><option value="high">Високий</option><option value="med">Середній</option><option value="low">Низький</option></select></div>
+        <div class="fl"><label for="iRepeat">Повторюваність</label><select class="field" id="iRepeat"><option value="">Разова</option><option value="щодня">Щодня</option><option value="щотижня">Щотижня</option><option value="щомісяця">Щомісяця</option></select></div>
+        <div class="fl"><label for="iStatus">Статус без відповідальних</label><select class="field" id="iStatus"></select></div>
+      </div>
+      <div class="fl"><label for="iComment">Примітка директора</label><textarea class="field" id="iComment" rows="2" placeholder="Що саме потрібно від відповідальних"></textarea></div>
+    </div>
+    <div class="fl" id="asgEditor">
+      <label>Відповідальні</label>
+      <div class="asg-list" id="asgList"></div>
+      <div><button class="btn" type="button" id="asgAdd">+ Додати відповідального</button></div>
+      <p class="note">Можна додати людей з різних підрозділів: кожен побачить задачу у себе й заповнить свій звіт.</p>
+    </div>
+    <div id="repSection"></div>
+    <p class="note" id="dlgNote"></p>
+    <div class="dlg-f">
+      <div id="delWrap"></div>
+      <div class="r">
+        <button class="btn" type="button" id="cancelBtn">Закрити</button>
+        <button class="btn primary" type="submit" id="saveBtn">Зберегти</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<!-- passwords dialog -->
+<dialog id="pwDlg" aria-labelledby="pwDlgTitle">
+  <div class="dlg">
+    <h2 id="pwDlgTitle">Паролі розділів</h2>
+    <p class="note">Після зміни пароля всі, хто зайшов у цей розділ, вийдуть на всіх пристроях і мають увійти з новим паролем. Мінімум 10 символів, літери й цифри. Запишіть пароль: відновити його неможливо, але директор завжди може задати новий.</p>
+    <div class="pwset" id="pwSet"></div>
+    <div class="dlg-f"><div class="r"><button class="btn" type="button" id="pwClose">Готово</button></div></div>
+  </div>
+</dialog>
+
+<div id="dls" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+
+<script src="config.js"></script>
+<script src="seed.js"></script>
+<script src="app-core.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence, onAuthStateChanged, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, collection, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const cfg = window.FIREBASE_CONFIG;
+if (!cfg || !cfg.apiKey || /ВСТАВ|PASTE/i.test(cfg.apiKey)) {
+  document.getElementById("cfgMsg").hidden = false;
+  document.getElementById("pw").disabled = true;
+} else {
+  const app = initializeApp(cfg);
+  const auth = getAuth(app);
+  const fs = getFirestore(app);
+  let sec = null;
+  const secAuth = () => (sec ||= getAuth(initializeApp(cfg, "password-check")));
+  const ref = p => doc(fs, p);
+  window.startApp({
+    emails: window.ROLE_EMAILS,
+    async signIn(email, pw, remember) {
+      await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+      await signInWithEmailAndPassword(auth, email, pw);
+    },
+    signOut: () => signOut(auth),
+    onAuth(cb) { onAuthStateChanged(auth, u => cb(u ? u.email : null)); },
+    async verifyPassword(email, pw) { const a = secAuth(); await signInWithEmailAndPassword(a, email, pw); await signOut(a); },
+    async changePassword(email, cur, nw) {
+      if (auth.currentUser && auth.currentUser.email === email) {
+        await reauthenticateWithCredential(auth.currentUser, EmailAuthProvider.credential(email, cur));
+        await updatePassword(auth.currentUser, nw);
+      } else {
+        const a = secAuth(); await signInWithEmailAndPassword(a, email, cur);
+        await updatePassword(a.currentUser, nw); await signOut(a);
+      }
+    },
+    async get(p) { const s = await getDoc(ref(p)); return s.exists() ? s.data() : null; },
+    set: (p, d) => setDoc(ref(p), d),
+    merge: (p, d) => setDoc(ref(p), d, { merge: true }),
+    del: p => deleteDoc(ref(p)),
+    newId: c => doc(collection(fs, c)).id,
+    watchDoc(p, next, err) { return onSnapshot(ref(p), s => next(s.exists() ? s.data() : null), err); },
+    watchTasks(dept, next, err) {
+      const q = dept ? query(collection(fs, "tasks"), where("depts", "array-contains", dept)) : collection(fs, "tasks");
+      return onSnapshot(q, s => next(s.docs.map(d => ({ id: d.id, data: d.data() }))), err);
+    }
+  });
+}
+</script>
+</body>
+</html>
