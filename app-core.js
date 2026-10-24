@@ -317,6 +317,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     $("#appTitle").textContent=ROLES[role].title;
     $("#depts").hidden=!isDir();
     $("#settingsBtn").hidden=!isDir();
+    $("#staffBtn").hidden=!isDir();
     $("#footNote").textContent=isDir()
       ?"Ви ставите задачі, призначаєте відповідальних з будь-якого підрозділу, задаєте терміни, плани та паролі. Кожен відповідальний пише свій звіт. Дані зашифровані."
       :"Ви бачите задачі, де є відповідальні з вашого підрозділу. Оновлюйте свій статус і пишіть звіт; звіти інших учасників задачі видно тут же.";
@@ -337,7 +338,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     $("#loginErr").textContent=msg||"";
   }
   $("#logoutBtn").addEventListener("click",()=>logout(""));
-  function closeAll(){[$("#dlg"),$("#pwDlg")].forEach(d=>{try{d.close()}catch(e){d.removeAttribute("open")}})}
+  function closeAll(){[$("#dlg"),$("#pwDlg"),$("#staffDlg")].forEach(d=>{try{d.close()}catch(e){d.removeAttribute("open")}})}
   function onVault(){
     if(((vault.rev||{})[role]||0)!==sessionRev){logout("Пароль розділу змінено. Увійдіть з новим паролем.");return}
     renderBanner();
@@ -442,8 +443,13 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       },()=>{}));
       unsubs.push(fb.watchDoc("staff/"+d,async doc=>{
         if(!role)return;
-        if(doc){const o=await openObj(keys[d],doc);if(o&&Array.isArray(o.people))staff[d]=o.people}
+        if(doc){const o=await openObj(keys[d],doc);if(o&&Array.isArray(o.people)){
+          let fix=false;
+          staff[d]=o.people.map(p=>{if(!p.id){fix=true;return Object.assign({id:uid(),phone:"",note:""},p)}return Object.assign({},p)});
+          if(fix&&isDir())saveStaff(d);
+        }}
         renderDatalists();
+        if($("#staffDlg").open&&!staffForm)renderStaff();
       },()=>{}));
     });
   }
@@ -483,19 +489,45 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     Object.assign(t,fields);stamp(t);
     enqueue(t.id,()=>writeCore(t,false)).catch(writeErr);
   }
-  function addStaff(list){
+  /* ---------- people directory ---------- */
+  function saveStaff(d){
+    if(!isDir()||!keys[d])return Promise.resolve();
+    const list=(staff[d]||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,"uk"));
+    staff[d]=list;
+    return enqueue("staff-"+d,async()=>{const b=await sealObj(keys[d],{people:list});await fb.set("staff/"+d,{iv:b.iv,ct:b.ct,updatedAt:new Date().toISOString()})}).catch(writeErr);
+  }
+  function findPerson(pid){
+    if(!pid)return null;
+    for(const d of DEPTS){const p=(staff[d.id]||[]).find(x=>x.id===pid);if(p)return {p,dept:d.id}}
+    return null;
+  }
+  function linkStaff(list){
     if(!isDir())return;
-    const byDept={};
-    list.forEach(a=>{if(!a.name)return;(byDept[a.dept]=byDept[a.dept]||[]).push({position:a.position||"",name:a.name})});
-    Object.keys(byDept).forEach(d=>{
-      if(!keys[d])return;
-      const cur=(staff[d]||[]).map(x=>Object.assign({},x));let changed=false;
-      byDept[d].forEach(p=>{const ex=cur.find(x=>x.name.toLowerCase()===p.name.toLowerCase());if(!ex){cur.push(p);changed=true}else if(p.position&&ex.position!==p.position){ex.position=p.position;changed=true}});
-      if(!changed)return;
-      cur.sort((a,b)=>a.name.localeCompare(b.name,"uk"));
-      staff[d]=cur;renderDatalists();
-      enqueue("staff-"+d,async()=>{const b=await sealObj(keys[d],{people:cur});await fb.set("staff/"+d,{iv:b.iv,ct:b.ct,updatedAt:new Date().toISOString()})}).catch(()=>{});
+    const touched=new Set();
+    list.forEach(a=>{
+      if(a.pid&&findPerson(a.pid))return;
+      if(!a.name)return;
+      const arr=staff[a.dept]=staff[a.dept]||[];
+      let p=arr.find(x=>x.name.toLowerCase()===a.name.toLowerCase());
+      if(!p){p={id:uid(),name:a.name,position:a.position||"",phone:"",note:""};arr.push(p);touched.add(a.dept)}
+      a.pid=p.id;
     });
+    touched.forEach(saveStaff);
+  }
+  function applyPerson(pid,match){
+    const f=findPerson(pid);if(!f)return 0;
+    let n=0;
+    tasks.forEach(t=>{
+      let ch=false;
+      t.assignees.forEach(a=>{
+        if(a.pid===pid||(match&&!(a.pid&&findPerson(a.pid))&&match(a))){
+          if(a.pid!==pid||a.name!==f.p.name||a.position!==f.p.position||a.dept!==f.dept){Object.assign(a,{pid,name:f.p.name,position:f.p.position,dept:f.dept});ch=true}
+        }
+      });
+      if(ch){n++;stamp(t);enqueue(t.id,()=>writeCore(t,true)).catch(writeErr)}
+    });
+    if(n)render(true);
+    return n;
   }
 
   /* ---------- derived ---------- */
@@ -742,29 +774,53 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   const dlg=$("#dlg"); let editId=null;
   $("#iDept").innerHTML=DEPTS.map(d=>`<option value="${d.id}">${d.name}</option>`).join("");
   $("#iStatus").innerHTML=STATUSES.map(s=>`<option value="${s.id}">${s.name}</option>`).join("");
-  function asgRow(a){
-    const d=a.dept||"vyrobnytstvo";
-    return `<div class="asg-row" data-aid="${esc(a.id)}">
-      <select class="field a-dept" aria-label="Підрозділ">${DEPTS.map(x=>`<option value="${x.id}" ${x.id===d?"selected":""}>${x.name}</option>`).join("")}</select>
-      <input class="field a-pos" list="pos-${d}" value="${esc(a.position||"")}" placeholder="Посада" aria-label="Посада">
-      <input class="field a-name" list="nm-${d}" value="${esc(a.name||"")}" placeholder="ПІБ, напр. Петренко Іван Іванович" aria-label="ПІБ">
-      <button class="btn ghost a-del" type="button" aria-label="Прибрати відповідального">✕</button></div>`;
+  function personOptions(sel){
+    return DEPTS.map(d=>{
+      const list=(staff[d.id]||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,"uk"));
+      return list.length?`<optgroup label="${d.name}">${list.map(p=>`<option value="${esc(p.id)}" ${p.id===sel?"selected":""}>${esc(p.name)}${p.position?" — "+esc(p.position):""}</option>`).join("")}</optgroup>`:"";
+    }).join("");
   }
-  function renderAsgEmpty(){const l=$("#asgList");if(!l.querySelector(".asg-row")&&!l.querySelector(".asg-empty"))l.innerHTML=`<p class="note asg-empty">Додайте хоча б одного відповідального: посаду й ПІБ.</p>`}
-  $("#asgAdd").addEventListener("click",()=>{
+  function personSelectInner(sel,manual){
+    return `<option value="">— оберіть працівника —</option>${personOptions(sel)}<option value="__manual" ${manual?"selected":""}>Вписати вручну…</option>`;
+  }
+  function asgRow(a){
+    const linked=!!(a.pid&&findPerson(a.pid)), manual=!linked&&!!(a.position||a.name), d=a.dept||"vyrobnytstvo";
+    return `<div class="asg-row2" data-aid="${esc(a.id)}">
+      <div class="asg-pick"><select class="field a-person" aria-label="Працівник">${personSelectInner(linked?a.pid:"",manual)}</select>
+        <button class="btn ghost a-del" type="button" aria-label="Прибрати відповідального">✕</button></div>
+      <div class="asg-manual" ${manual?"":"hidden"}>
+        <select class="field a-dept" aria-label="Підрозділ">${DEPTS.map(x=>`<option value="${x.id}" ${x.id===d?"selected":""}>${x.name}</option>`).join("")}</select>
+        <input class="field a-pos" list="pos-${d}" value="${esc(a.position||"")}" placeholder="Посада" aria-label="Посада">
+        <input class="field a-name" list="nm-${d}" value="${esc(a.name||"")}" placeholder="ПІБ (буде створено картку)" aria-label="ПІБ">
+      </div></div>`;
+  }
+  function renderAsgEmpty(){const l=$("#asgList");if(!l.querySelector(".asg-row2")&&!l.querySelector(".asg-empty"))l.innerHTML=`<p class="note asg-empty">Додайте хоча б одного відповідального.</p>`}
+  function addAsgRow(pid){
     const l=$("#asgList");const em=l.querySelector(".asg-empty");if(em)em.remove();
-    const rows=l.querySelectorAll(".asg-row");const last=rows.length?rows[rows.length-1].querySelector(".a-dept"):null;
-    l.insertAdjacentHTML("beforeend",asgRow({id:uid(),dept:last?last.value:$("#iDept").value}));
-    const nr=l.querySelectorAll(".asg-row");nr[nr.length-1].querySelector(".a-pos").focus();
-  });
-  $("#asgList").addEventListener("click",e=>{if(e.target.closest(".a-del")){e.target.closest(".asg-row").remove();renderAsgEmpty()}});
+    const f=pid?findPerson(pid):null;
+    l.insertAdjacentHTML("beforeend",asgRow(f?{id:uid(),pid,dept:f.dept,position:f.p.position,name:f.p.name}:{id:uid(),dept:$("#iDept").value}));
+    const rows=l.querySelectorAll(".asg-row2");return rows[rows.length-1];
+  }
+  function refreshPersonSelects(){
+    $("#asgList").querySelectorAll(".a-person").forEach(sel=>{const v=sel.value;sel.innerHTML=personSelectInner(v==="__manual"?"":v,v==="__manual");if(v&&v!=="__manual"&&findPerson(v))sel.value=v});
+  }
+  $("#asgAdd").addEventListener("click",()=>{const r=addAsgRow();r.querySelector(".a-person").focus()});
+  $("#asgAdd").insertAdjacentHTML("afterend",' <button class="btn ghost" type="button" id="asgNewPerson">+ Нова картка працівника</button>');
+  $("#asgNewPerson").addEventListener("click",()=>openStaff({newDept:$("#iDept").value,fromTask:true}));
+  $("#asgList").addEventListener("click",e=>{if(e.target.closest(".a-del")){e.target.closest(".asg-row2").remove();renderAsgEmpty()}});
   $("#asgList").addEventListener("change",e=>{
-    const row=e.target.closest(".asg-row");if(!row)return;
+    const row=e.target.closest(".asg-row2");if(!row)return;
+    const man=row.querySelector(".asg-manual");
+    if(e.target.classList.contains("a-person")){
+      const v=e.target.value;
+      if(v==="__manual"){man.hidden=false;row.querySelector(".a-name").focus()}
+      else{man.hidden=true;const f=findPerson(v);if(f){row.querySelector(".a-dept").value=f.dept;row.querySelector(".a-pos").value=f.p.position;row.querySelector(".a-name").value=f.p.name}}
+    }
     if(e.target.classList.contains("a-dept")){const d=e.target.value;row.querySelector(".a-pos").setAttribute("list","pos-"+d);row.querySelector(".a-name").setAttribute("list","nm-"+d)}
     if(e.target.classList.contains("a-name")){
       const d=row.querySelector(".a-dept").value, nm=e.target.value.trim().toLowerCase();
       const p=(staff[d]||[]).find(x=>x.name.toLowerCase()===nm);
-      if(p&&!row.querySelector(".a-pos").value)row.querySelector(".a-pos").value=p.position;
+      if(p){row.querySelector(".a-person").value=p.id;man.hidden=true;row.querySelector(".a-pos").value=p.position}
     }
   });
   function repCard(t,a){
@@ -871,10 +927,14 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(canEditAll()){
       const title=$("#iTitle").value.trim(); if(!title){$("#iTitle").focus();return}
       const list=[];
-      $("#asgList").querySelectorAll(".asg-row").forEach(r=>{
+      $("#asgList").querySelectorAll(".asg-row2").forEach(r=>{
+        const v=r.querySelector(".a-person").value;
+        if(v&&v!=="__manual"){const f=findPerson(v);if(f)list.push({id:r.dataset.aid,pid:v,dept:f.dept,position:f.p.position,name:f.p.name});return}
+        if(v!=="__manual")return;
         const pos=r.querySelector(".a-pos").value.trim(), name=r.querySelector(".a-name").value.trim();
         if(pos||name)list.push({id:r.dataset.aid,dept:r.querySelector(".a-dept").value,position:pos,name});
       });
+      linkStaff(list);
       const isNew=!t;
       const task=t||{id:fb.newId("tasks"),n:tasks.reduce((m,x)=>Math.max(m,x.n||0),0)+1,reps:{},depts:[],assignees:[],tk:null,tkRaw:null};
       Object.assign(task,{title,primary:$("#iDept").value,block:$("#iBlock").value.trim(),due:$("#iDue").value||"",prio:$("#iPrio").value,
@@ -882,10 +942,154 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       stamp(task);
       if(isNew)tasks.push(task);
       enqueue(task.id,()=>writeCore(task,true)).then(()=>toast(isNew?"Задачу поставлено":"Збережено"),writeErr);
-      addStaff(list);
     }
     closeDlg();render(true);
   });
+
+  /* ---------- people cards (director) ---------- */
+  document.body.insertAdjacentHTML("beforeend",`<dialog id="staffDlg" aria-labelledby="staffTitle"><div class="dlg">
+    <h2 id="staffTitle">Працівники</h2>
+    <p class="note">Картки людей, яких можна призначати відповідальними. Якщо змінити ПІБ, посаду чи підрозділ, це одразу оновиться в усіх задачах працівника.</p>
+    <div id="staffBody" class="staff-body"></div>
+    <div class="dlg-f"><div class="r"><button class="btn" type="button" id="staffClose">Готово</button></div></div></div></dialog>`);
+  $("#settingsBtn").insertAdjacentHTML("beforebegin",`<button class="btn" id="staffBtn" type="button" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.3-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.3 3.3 0 0 1 0 6.6M18 14.8c2 .7 3.2 2.4 3.6 5.2"/></svg>Працівники</button>`);
+  const staffDlg=$("#staffDlg");
+  let staffForm=null, unlinked=[], pendingAssign=false;
+  const initials=n=>String(n||"?").trim().split(/\s+/).slice(0,2).map(w=>w[0]||"").join("").toUpperCase()||"?";
+  function openStaff(opts){
+    if(!isDir())return;
+    staffForm=opts&&opts.newDept?{mode:"new",dept:opts.newDept}:null;
+    pendingAssign=!!(opts&&opts.fromTask);
+    renderStaff();
+    try{staffDlg.showModal()}catch(e){staffDlg.setAttribute("open","")}
+  }
+  function closeStaff(){staffForm=null;pendingAssign=false;try{staffDlg.close()}catch(e){staffDlg.removeAttribute("open")}}
+  $("#staffBtn").addEventListener("click",()=>openStaff(null));
+  $("#staffClose").addEventListener("click",closeStaff);
+  staffDlg.addEventListener("close",()=>{staffForm=null;pendingAssign=false});
+  function personForm(f){
+    const ex=f.mode==="edit"?findPerson(f.pid):null;
+    const p=ex?ex.p:{name:f.link?f.link.name:"",position:f.link?f.link.position:"",phone:"",note:""};
+    const d=f.dept;
+    return `<form class="pcard pform" id="pForm" autocomplete="off">
+      <div class="grid2">
+        <div class="fl"><label for="pfName">ПІБ</label><input class="field" id="pfName" value="${esc(p.name)}" placeholder="Петренко Іван Іванович"></div>
+        <div class="fl"><label for="pfPos">Посада</label><input class="field" id="pfPos" list="pos-${d}" value="${esc(p.position)}" placeholder="Напр., Головний інженер"></div>
+        <div class="fl"><label for="pfDept">Підрозділ</label><select class="field" id="pfDept">${DEPTS.map(x=>`<option value="${x.id}" ${x.id===d?"selected":""}>${x.name}</option>`).join("")}</select></div>
+        <div class="fl"><label for="pfPhone">Телефон</label><input class="field mono" id="pfPhone" type="tel" value="${esc(p.phone||"")}" placeholder="+380…"></div>
+      </div>
+      <div class="fl"><label for="pfNote">Примітка</label><input class="field" id="pfNote" value="${esc(p.note||"")}" placeholder="Напр., відповідає за верстати з ЧПК"></div>
+      ${f.link?`<p class="note">Картку буде прив'язано до задач, де зараз вказано «${esc(personLabel(f.link))}».</p>`:""}
+      ${ex&&ex.dept!==undefined?`<p class="note">Задач у працівника: ${tasks.filter(t=>t.assignees.some(a=>a.pid===f.pid)).length}. Зміни застосуються до всіх.</p>`:""}
+      <div class="dlg-f"><div id="pfDel">${f.mode==="edit"?'<button class="btn danger" type="button" id="pfDelBtn">Видалити картку</button>':""}</div>
+        <div class="r"><button class="btn" type="button" id="pfCancel">Скасувати</button><button class="btn primary" type="submit">Зберегти</button></div></div>
+      <div class="err" id="pfErr"></div>
+    </form>`;
+  }
+  function renderStaff(){
+    const cnt=pid=>tasks.filter(t=>t.assignees.some(a=>a.pid===pid)).length;
+    let html="";
+    DEPTS.forEach(d=>{
+      const list=(staff[d.id]||[]).slice().sort((a,b)=>a.name.localeCompare(b.name,"uk"));
+      const adding=staffForm&&staffForm.mode==="new"&&staffForm.dept===d.id;
+      html+=`<section class="staff-sec"><div class="staff-h"><h3>${d.name} <span class="cnt">${list.length}</span></h3><button class="btn" type="button" data-pnew="${d.id}">+ Додати працівника</button></div>
+        <div class="pgrid">${adding?personForm(staffForm):""}${list.map(p=>staffForm&&staffForm.mode==="edit"&&staffForm.pid===p.id?personForm(staffForm):
+          `<article class="pcard"><div class="pc-top"><span class="avatar">${esc(initials(p.name))}</span><div class="pc-main"><b>${esc(p.name)}</b><span>${esc(p.position||"Посаду не вказано")}</span></div>
+            <button class="btn ghost" type="button" data-pedit="${esc(p.id)}">Редагувати</button></div>
+            ${p.phone||p.note?`<div class="pc-meta">${p.phone?`<span class="mono">${esc(p.phone)}</span>`:""}${p.note?`<span>${esc(p.note)}</span>`:""}</div>`:""}
+            <div class="pc-foot">Задач: ${cnt(p.id)}</div></article>`).join("")}${!list.length&&!adding?'<p class="note">Карток ще немає.</p>':""}</div></section>`;
+    });
+    const um=new Map();
+    tasks.forEach(t=>t.assignees.forEach(a=>{
+      if(a.pid&&findPerson(a.pid))return;
+      const k=a.dept+"|"+(a.position||"")+"|"+(a.name||"");
+      if(!um.has(k))um.set(k,{dept:a.dept,position:a.position||"",name:a.name||"",n:0});
+      um.get(k).n++;
+    }));
+    unlinked=[...um.values()].sort((x,y)=>(x.dept+x.position).localeCompare(y.dept+y.position,"uk"));
+    if(unlinked.length){
+      html+=`<section class="staff-sec"><div class="staff-h"><h3>Відповідальні без картки <span class="cnt">${unlinked.length}</span></h3></div>
+        <p class="note">У цих задачах відповідальний вказаний лише текстом. Створіть картку з ПІБ, і всі ці задачі оновляться автоматично.</p>
+        <div class="pgrid">${unlinked.map((u,i)=>staffForm&&staffForm.mode==="link"&&staffForm.key===i?personForm(staffForm):
+          `<article class="pcard dashed"><div class="pc-top"><span class="avatar">?</span><div class="pc-main"><b>${esc(u.name||u.position||"Без назви")}</b><span>${u.name?esc(u.position)+" · ":""}${esc(deptName(u.dept))}</span></div>
+            <button class="btn" type="button" data-plink="${i}">Створити картку</button></div><div class="pc-foot">Задач: ${u.n}</div></article>`).join("")}</div></section>`;
+    }
+    $("#staffBody").innerHTML=html;
+    const f=$("#pfName");if(f){f.focus();if(f.scrollIntoView)f.scrollIntoView({block:"nearest"})}
+  }
+  $("#staffBody").addEventListener("click",e=>{
+    const t=e.target.closest("button");if(!t)return;
+    if(t.dataset.pnew){staffForm={mode:"new",dept:t.dataset.pnew};renderStaff()}
+    else if(t.dataset.pedit){const f=findPerson(t.dataset.pedit);if(f){staffForm={mode:"edit",pid:f.p.id,dept:f.dept};renderStaff()}}
+    else if(t.dataset.plink!==undefined){const u=unlinked[Number(t.dataset.plink)];if(u){staffForm={mode:"link",key:Number(t.dataset.plink),dept:u.dept,link:u};renderStaff()}}
+    else if(t.id==="pfCancel"){staffForm=null;renderStaff()}
+    else if(t.id==="pfDelBtn"){$("#pfDel").innerHTML=`<span class="confirm">Видалити картку? У задачах ім'я залишиться текстом. <button class="btn danger" type="button" id="pfDelYes">Так</button><button class="btn" type="button" id="pfDelNo">Ні</button></span>`}
+    else if(t.id==="pfDelNo"){$("#pfDel").innerHTML='<button class="btn danger" type="button" id="pfDelBtn">Видалити картку</button>'}
+    else if(t.id==="pfDelYes"&&staffForm&&staffForm.mode==="edit"){
+      const f=findPerson(staffForm.pid);
+      if(f){staff[f.dept]=staff[f.dept].filter(x=>x.id!==f.p.id);saveStaff(f.dept)}
+      staffForm=null;renderStaff();renderDatalists();refreshPersonSelects();toast("Картку видалено");
+    }
+  });
+  $("#staffBody").addEventListener("change",e=>{if(e.target.id==="pfDept")$("#pfPos").setAttribute("list","pos-"+e.target.value)});
+  $("#staffBody").addEventListener("submit",e=>{
+    e.preventDefault();
+    if(!staffForm||!isDir())return;
+    const name=$("#pfName").value.trim(), pos=$("#pfPos").value.trim(), d=$("#pfDept").value, phone=$("#pfPhone").value.trim(), note=$("#pfNote").value.trim();
+    if(!name){$("#pfErr").textContent="Вкажіть ПІБ.";$("#pfName").focus();return}
+    let pid;
+    if(staffForm.mode==="edit"){
+      const f=findPerson(staffForm.pid);if(!f){staffForm=null;renderStaff();return}
+      pid=f.p.id;
+      const upd=Object.assign({},f.p,{name,position:pos,phone,note});
+      staff[f.dept]=(staff[f.dept]||[]).filter(x=>x.id!==pid);
+      if(f.dept!==d)saveStaff(f.dept);
+      (staff[d]=staff[d]||[]).push(upd);saveStaff(d);
+    }else{
+      const dup=(staff[d]||[]).find(x=>x.name.toLowerCase()===name.toLowerCase());
+      if(dup){$("#pfErr").textContent="Картка з таким ПІБ у цьому підрозділі вже є.";return}
+      pid=uid();
+      (staff[d]=staff[d]||[]).push({id:pid,name,position:pos,phone,note});saveStaff(d);
+    }
+    const link=staffForm.mode==="link"?staffForm.link:null;
+    const n=applyPerson(pid,link?(a=>a.dept===link.dept&&(a.position||"")===link.position&&(a.name||"")===link.name):null);
+    const fromTask=pendingAssign&&staffForm.mode==="new";
+    staffForm=null;renderDatalists();refreshPersonSelects();
+    if(fromTask&&$("#dlg").open){
+      const empty=[...$("#asgList").querySelectorAll(".a-person")].find(s=>!s.value);
+      if(empty){empty.value=pid;empty.dispatchEvent(new Event("change",{bubbles:true}))}else addAsgRow(pid);
+      pendingAssign=false;closeStaff();toast("Картку створено й додано до задачі");return;
+    }
+    renderStaff();
+    toast(n?"Збережено. Оновлено задач: "+n:"Картку збережено");
+  });
+  (function(){
+    const st=document.createElement("style");
+    st.textContent=`
+#staffDlg{width:min(900px,calc(100vw - 32px))}
+.staff-body{display:flex;flex-direction:column;gap:20px;max-height:min(68vh,680px);overflow:auto;padding-right:2px}
+.staff-sec{display:flex;flex-direction:column;gap:8px}
+.staff-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.staff-h h3{margin:0;font-family:var(--font-display);font-size:14px;font-weight:500;display:flex;gap:8px;align-items:center}
+.staff-h .cnt{font-family:var(--font-mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:0 7px;color:var(--muted)}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px}
+.pcard{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--surface);display:flex;flex-direction:column;gap:8px;min-width:0}
+.pcard.dashed{border-style:dashed;background:var(--surface-2)}
+.pform{grid-column:1/-1;border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.pc-top{display:flex;gap:10px;align-items:center}
+.avatar{width:38px;height:38px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none;letter-spacing:.02em}
+.pc-main{display:flex;flex-direction:column;min-width:0;flex:1}
+.pc-main b{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc-main span{font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc-meta{display:flex;flex-direction:column;gap:2px;font-size:12.5px;color:var(--muted)}
+.pc-foot{font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:6px}
+.asg-row2{display:flex;flex-direction:column;gap:8px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+.asg-pick{display:flex;gap:8px;align-items:center}
+.asg-pick select{flex:1;min-width:0}
+.asg-manual{display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1.3fr);gap:8px}
+@media (max-width:600px){#staffDlg{width:100vw}.staff-body{max-height:none}.asg-manual{grid-template-columns:1fr}.pgrid{grid-template-columns:1fr}}`;
+    document.head.appendChild(st);
+  })();
 
   /* ---------- passwords (director) ---------- */
   const pwDlg=$("#pwDlg");
