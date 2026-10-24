@@ -15,13 +15,13 @@ window.startApp=function(fb){
   const ROLE_DEPTS={director:DEPTS.map(d=>d.id),vyrobnytstvo:["vyrobnytstvo"],administratsiia:["administratsiia"]};
   const DEFAULT_POS={
     vyrobnytstvo:["Начальник виробництва","Головний інженер","Технолог","Майстер дільниці","Головний механік","ВТК / контролер","Постачальник","Комірник","Інженер з охорони праці","Оператор верстата з ЧПК"],
-    administratsiia:["Головний бухгалтер","Бухгалтер","Бухгалтер-експерт","Менеджер з продажу","Економіст","Юрист","Офіс-менеджер","HR-менеджер","Логіст"]
+    administratsiia:["Директор","Начальник відділу кадрів","Інспектор з кадрів","Юрист","Головний бухгалтер","Бухгалтер","Бухгалтер-експерт","Адміністратор офісу","Офіс-менеджер","HR-менеджер","Менеджер з продажу","Економіст","Логіст"]
   };
   const deptName=id=>(DEPTS.find(d=>d.id===id)||{}).name||id;
   const STATUSES=[{id:"todo",name:"Не розпочато"},{id:"doing",name:"В роботі"},{id:"done",name:"Виконано"},{id:"issue",name:"Проблема"}];
   const PRIOS={high:"Високий",med:"Середній",low:"Низький"};
   const PRIO_RANK={high:0,med:1,low:2};
-  const BLOCK_ORDER=["Планування","Виробництво","Технологія","Якість","Обладнання","Постачання і склад","Персонал","Охорона праці","Управління"];
+  const BLOCK_ORDER=["Планування","Виробництво","Технологія","Якість","Обладнання","Постачання і склад","Персонал","Охорона праці","Кадри","Юридичні питання","Бухгалтерія і фінанси","Адміністрування офісу","HR і розвиток персоналу","Управління"];
   const MIN_PW=10, ITER=310000;
 
   const $=s=>document.querySelector(s);
@@ -318,6 +318,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     $("#depts").hidden=!isDir();
     $("#settingsBtn").hidden=!isDir();
     $("#staffBtn").hidden=!isDir();
+    $("#tplBtn").hidden=!isDir();
     $("#footNote").textContent=isDir()
       ?"Ви ставите задачі, призначаєте відповідальних з будь-якого підрозділу, задаєте терміни, плани та паролі. Кожен відповідальний пише свій звіт. Дані зашифровані."
       :"Ви бачите задачі, де є відповідальні з вашого підрозділу. Оновлюйте свій статус і пишіть звіт; звіти інших учасників задачі видно тут же.";
@@ -338,7 +339,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     $("#loginErr").textContent=msg||"";
   }
   $("#logoutBtn").addEventListener("click",()=>logout(""));
-  function closeAll(){[$("#dlg"),$("#pwDlg"),$("#staffDlg")].forEach(d=>{try{d.close()}catch(e){d.removeAttribute("open")}})}
+  function closeAll(){[$("#dlg"),$("#pwDlg"),$("#staffDlg"),$("#tplDlg")].forEach(d=>{try{d.close()}catch(e){d.removeAttribute("open")}})}
   function onVault(){
     if(((vault.rev||{})[role]||0)!==sessionRev){logout("Пароль розділу змінено. Увійдіть з новим паролем.");return}
     renderBanner();
@@ -639,7 +640,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(!loaded)return `<div class="panel empty"><strong>Розшифрування задач…</strong><span>Зачекайте кілька секунд.</span></div>`;
     if(!scopeTasks().length){
       const nm=isDir()?(ui.dept==="all"?"Підприємство":deptName(ui.dept)):deptName(role);
-      return `<div class="panel empty"><strong>${esc(nm)}: задач ще немає</strong><span>${isDir()?"Додайте першу задачу кнопкою «Нова задача».":"Директор ще не поставив задачі вашому підрозділу."}</span></div>`;
+      return `<div class="panel empty"><strong>${esc(nm)}: задач ще немає</strong><span>${isDir()?"Додайте задачу кнопкою «Нова задача» або готовий набір кнопкою «Шаблони».":"Директор ще не поставив задачі вашому підрозділу."}</span></div>`;
     }
     return `<div class="panel empty"><strong>Нічого не знайдено</strong><span>Змініть пошук або скиньте фільтри.</span></div>`;
   }
@@ -1088,6 +1089,113 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
 .asg-pick select{flex:1;min-width:0}
 .asg-manual{display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1.3fr);gap:8px}
 @media (max-width:600px){#staffDlg{width:100vw}.staff-body{max-height:none}.asg-manual{grid-template-columns:1fr}.pgrid{grid-template-columns:1fr}}`;
+    document.head.appendChild(st);
+  })();
+
+  /* ---------- task templates (director) ---------- */
+  const V="vyrobnytstvo", A="administratsiia";
+  const ADMIN_TEMPLATE={
+    plan:{period:"Листопад – грудень 2026",text:"1. Кадрові документи в повному порядку, військовий облік перевірено.\n2. Проведено ревізію договорів, є реєстр дозволів і ліцензій з термінами дії.\n3. Директор щотижня отримує фінансовий звіт, діє платіжний календар.\n4. Налагоджено документообіг і табель, вакансії закриваються за планом.\n5. Нові працівники проходять адаптацію за єдиним чек-листом."},
+    tasks:[
+      {block:"Кадри",title:"Перевірити особові справи працівників: трудові договори, накази, заяви — повнота й відповідність",prio:"high",w:3,owners:[[A,"Начальник відділу кадрів"]]},
+      {block:"Кадри",title:"Перевірити та впорядкувати військовий облік працівників",prio:"high",w:2,owners:[[A,"Інспектор з кадрів"]]},
+      {block:"Кадри",title:"Вести табель робочого часу й передавати його в бухгалтерію до встановленої дати",prio:"high",w:2,repeat:"щомісяця",owners:[[A,"Інспектор з кадрів"],[A,"Бухгалтер"]]},
+      {block:"Кадри",title:"Оновити штатний розпис і посадові інструкції для всіх посад",prio:"med",w:4,owners:[[A,"Начальник відділу кадрів"],[V,"Начальник виробництва"]]},
+      {block:"Кадри",title:"Скласти графік відпусток на 2027 рік і погодити з керівниками підрозділів",prio:"med",w:6,owners:[[A,"Начальник відділу кадрів"]]},
+      {block:"Кадри",title:"Скласти графік медичних оглядів працівників",prio:"med",w:4,owners:[[A,"Інспектор з кадрів"],[V,"Інженер з охорони праці"]]},
+      {block:"Юридичні питання",title:"Провести ревізію чинних договорів з постачальниками й клієнтами: терміни, штрафи, пролонгація",prio:"high",w:4,owners:[[A,"Юрист"]]},
+      {block:"Юридичні питання",title:"Підготувати типові шаблони договорів: поставка, послуги, конфіденційність",prio:"med",w:4,owners:[[A,"Юрист"]]},
+      {block:"Юридичні питання",title:"Скласти реєстр дозволів, ліцензій і сертифікатів підприємства з термінами дії",prio:"med",w:3,owners:[[A,"Юрист"]]},
+      {block:"Юридичні питання",title:"Налагодити претензійну роботу з боржниками: шаблони претензій і порядок дій",prio:"med",w:3,owners:[[A,"Юрист"],[A,"Головний бухгалтер"]]},
+      {block:"Юридичні питання",title:"Перевірити правила внутрішнього трудового розпорядку й положення про оплату праці на відповідність законодавству",prio:"low",w:6,owners:[[A,"Юрист"],[A,"Начальник відділу кадрів"]]},
+      {block:"Бухгалтерія і фінанси",title:"Скласти платіжний календар на місяць: податки, зарплата, постачальники",prio:"high",w:1,repeat:"щомісяця",owners:[[A,"Головний бухгалтер"]]},
+      {block:"Бухгалтерія і фінанси",title:"Готувати звіт директору: залишки коштів, дебіторська та кредиторська заборгованість",prio:"high",w:1,repeat:"щотижня",owners:[[A,"Головний бухгалтер"]]},
+      {block:"Бухгалтерія і фінанси",title:"Розрахувати фактичну собівартість основних виробів",prio:"high",w:4,owners:[[A,"Бухгалтер-експерт"],[V,"Начальник виробництва"]]},
+      {block:"Бухгалтерія і фінанси",title:"Провести звірку взаєморозрахунків з основними контрагентами",prio:"med",w:3,owners:[[A,"Бухгалтер"]]},
+      {block:"Бухгалтерія і фінанси",title:"Скласти план податкових звітів і платежів на квартал з термінами",prio:"med",w:2,owners:[[A,"Головний бухгалтер"]]},
+      {block:"Бухгалтерія і фінанси",title:"Провести інвентаризацію матеріалів і інструменту на складі",prio:"med",w:6,owners:[[A,"Бухгалтер"],[V,"Комірник"]]},
+      {block:"Адміністрування офісу",title:"Налагодити документообіг: реєстр вхідних і вихідних документів, терміни виконання",prio:"med",w:2,owners:[[A,"Адміністратор офісу"]]},
+      {block:"Адміністрування офісу",title:"Встановити порядок закупівлі канцтоварів, води й витратних матеріалів з місячним лімітом",prio:"low",w:2,owners:[[A,"Адміністратор офісу"]]},
+      {block:"Адміністрування офісу",title:"Скласти довідник контактів і графік роботи підрозділів",prio:"low",w:1,owners:[[A,"Адміністратор офісу"]]},
+      {block:"Адміністрування офісу",title:"Організувати резервне копіювання документів і доступи до спільних папок",prio:"med",w:3,owners:[[A,"Адміністратор офісу"]]},
+      {block:"HR і розвиток персоналу",title:"Скласти план закриття вакансій: потреба підрозділів, канали пошуку, терміни",prio:"high",w:2,owners:[[A,"HR-менеджер"],[V,"Начальник виробництва"]]},
+      {block:"HR і розвиток персоналу",title:"Розробити програму адаптації нових працівників: перший день, наставник, чек-лист",prio:"med",w:4,owners:[[A,"HR-менеджер"]]},
+      {block:"HR і розвиток персоналу",title:"Розробити систему оцінки працівників і план навчання на 2027 рік",prio:"med",w:6,owners:[[A,"HR-менеджер"]]},
+      {block:"HR і розвиток персоналу",title:"Провести опитування задоволеності працівників і підготувати висновки",prio:"low",w:6,owners:[[A,"HR-менеджер"]]},
+      {block:"Управління",title:"Запровадити щотижневу нараду адміністрації за цим трекером",prio:"high",w:1,repeat:"щотижня",owners:[[A,"Директор"]]}
+    ]
+  };
+  function prodTemplate(){
+    return (window.SEED_TASKS||[]).map(x=>({block:x.block,title:x.title,prio:x.prio||"med",due:x.due||"",repeat:x.repeat||"",owners:x.owner?[[x.dept,x.owner]]:[],primary:x.dept}));
+  }
+  const TEMPLATES=[
+    {id:"administratsiia",name:"Адміністрація",desc:"Кадри, юрист, бухгалтерія, адміністратор офісу, HR. Частина задач спільна з виробництвом.",primary:A,get:()=>ADMIN_TEMPLATE.tasks,plan:ADMIN_TEMPLATE.plan},
+    {id:"vyrobnytstvo",name:"Виробництво",desc:"24 стартові задачі цеху (ті, що додавались під час першого налаштування).",primary:V,get:prodTemplate,plan:null}
+  ];
+  function dueFromWeeks(w){
+    const d=new Date();const dow=(d.getDay()+6)%7;d.setDate(d.getDate()+(7-dow)%7+7*(w||0));
+    return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+  }
+  const tplKey=(dept,title)=>dept+"|"+String(title).trim().toLowerCase();
+  function tplMissing(tp){
+    const have=new Set(tasks.map(t=>tplKey(t.primary,t.title)));
+    return tp.get().filter(x=>!have.has(tplKey(x.primary||tp.primary,x.title)));
+  }
+  document.body.insertAdjacentHTML("beforeend",`<dialog id="tplDlg" aria-labelledby="tplTitle"><div class="dlg">
+    <h2 id="tplTitle">Шаблони задач</h2>
+    <p class="note">Готові набори задач для наради. Додаються лише ті задачі, яких ще немає, тож наявні задачі й звіти не змінюються. Відповідальні додаються посадами: ПІБ можна вписати потім у «Працівники» → «Відповідальні без картки».</p>
+    <div id="tplBody" class="tpl-body"></div>
+    <div class="dlg-f"><div class="r"><button class="btn" type="button" id="tplClose">Готово</button></div></div></div></dialog>`);
+  $("#settingsBtn").insertAdjacentHTML("beforebegin",`<button class="btn" id="tplBtn" type="button" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/></svg>Шаблони</button>`);
+  const tplDlg=$("#tplDlg"); let tplBusy=false;
+  function renderTpl(){
+    $("#tplBody").innerHTML=TEMPLATES.map(tp=>{
+      const all=tp.get(), miss=tplMissing(tp);
+      const shared=all.filter(x=>new Set((x.owners||[]).map(o=>o[0]).concat([x.primary||tp.primary])).size>1).length;
+      return `<section class="tpl"><div class="tpl-h"><div><h3>${esc(tp.name)}</h3><p class="note">${esc(tp.desc)}</p></div>
+        <button class="btn primary" type="button" data-tpl="${tp.id}" ${miss.length&&!tplBusy?"":"disabled"}>${miss.length?"Додати "+miss.length+" задач":"Уже додано"}</button></div>
+        <div class="tpl-meta"><span>Усього в шаблоні: ${all.length}</span>${shared?`<span>Спільних з іншим підрозділом: ${shared}</span>`:""}${tp.plan?`<span>Містить план підрозділу${plans[tp.primary]&&plans[tp.primary].text?" (у вас уже є план — його не змінимо)":""}</span>`:""}</div>
+        <details><summary>Переглянути задачі</summary><ul class="tpl-list">${all.map(x=>`<li><span class="tpl-blk">${esc(x.block)}</span> ${esc(x.title)} <span class="note">— ${esc((x.owners||[]).map(o=>o[1]).join(", "))}</span></li>`).join("")}</ul></details></section>`;
+    }).join("");
+  }
+  $("#tplBtn").addEventListener("click",()=>{if(!isDir())return;renderTpl();try{tplDlg.showModal()}catch(e){tplDlg.setAttribute("open","")}});
+  $("#tplClose").addEventListener("click",()=>{try{tplDlg.close()}catch(e){tplDlg.removeAttribute("open")}});
+  $("#tplBody").addEventListener("click",async e=>{
+    const b=e.target.closest("[data-tpl]");if(!b||tplBusy||!isDir())return;
+    const tp=TEMPLATES.find(x=>x.id===b.dataset.tpl);if(!tp)return;
+    const miss=tplMissing(tp);if(!miss.length)return;
+    tplBusy=true;renderTpl();
+    let n=tasks.reduce((m,x)=>Math.max(m,x.n||0),0), done=0;
+    try{
+      for(const x of miss){
+        n++;
+        const t={id:fb.newId("tasks"),n,primary:x.primary||tp.primary,title:x.title,block:x.block,due:x.due||dueFromWeeks(x.w),prio:x.prio||"med",repeat:x.repeat||"",comment:"",coreStatus:"todo",
+          assignees:(x.owners||[]).map(o=>({id:uid(),dept:o[0],position:o[1],name:""})),reps:{},depts:[],tk:null,tkRaw:null};
+        stamp(t);
+        await enqueue(t.id,()=>writeCore(t,true));
+        done++;b.textContent="Додано "+done+" з "+miss.length+"…";
+      }
+      if(tp.plan&&!(plans[tp.primary]&&plans[tp.primary].text)){
+        const at=new Date().toISOString(), obj={text:tp.plan.text,period:tp.plan.period};
+        plans[tp.primary]=Object.assign({},obj,{updatedAt:at});
+        await enqueue("plan-"+tp.primary,async()=>{const box=await sealObj(keys[tp.primary],obj);await fb.set("plans/"+tp.primary,{iv:box.iv,ct:box.ct,updatedAt:at,updatedBy:role})});
+      }
+      toast("Додано задач: "+done);
+    }catch(ex){writeErr(ex)}
+    tplBusy=false;setTimeout(()=>{renderTpl();render(true)},600);
+  });
+  (function(){
+    const st=document.createElement("style");
+    st.textContent=`#tplDlg{width:min(760px,calc(100vw - 32px))}
+.tpl-body{display:flex;flex-direction:column;gap:14px;max-height:min(66vh,640px);overflow:auto}
+.tpl{border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px;background:var(--surface)}
+.tpl-h{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.tpl-h h3{margin:0 0 4px;font-family:var(--font-display);font-size:15px;font-weight:500}
+.tpl-meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.tpl details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13px}
+.tpl-list{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px;font-size:13px}
+.tpl-blk{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+@media (max-width:600px){#tplDlg{width:100vw}.tpl-body{max-height:none}}`;
     document.head.appendChild(st);
   })();
 
