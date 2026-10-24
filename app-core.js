@@ -14,14 +14,14 @@ window.startApp=function(fb){
   const DEPTS=[{id:"vyrobnytstvo",name:"Виробництво"},{id:"administratsiia",name:"Адміністрація"}];
   const ROLE_DEPTS={director:DEPTS.map(d=>d.id),vyrobnytstvo:["vyrobnytstvo"],administratsiia:["administratsiia"]};
   const DEFAULT_POS={
-    vyrobnytstvo:["Начальник виробництва","Начальник виробничо-технічного відділу","Помічник начальника ВТВ","Головний інженер","Технолог","Майстер дільниці","Головний механік","ВТК / контролер","Постачальник","Комірник","Інженер з охорони праці","Оператор верстата з ЧПК"],
+    vyrobnytstvo:["Начальник виробництва","Начальник виробничо-технічного відділу","Помічник начальника ВТВ","Начальник ВТК №1","Начальник ВТК №2","Головний інженер","Технолог","Майстер дільниці","Головний механік","ВТК / контролер","Постачальник","Комірник","Інженер з охорони праці","Оператор верстата з ЧПК"],
     administratsiia:["Директор","Начальник відділу кадрів","Інспектор з кадрів","Юрист","Головний бухгалтер","Бухгалтер","Бухгалтер-експерт","Адміністратор офісу","Офіс-менеджер","HR-менеджер","Менеджер із закупівель","Менеджер з продажу","Економіст","Логіст"]
   };
   const deptName=id=>(DEPTS.find(d=>d.id===id)||{}).name||id;
   const STATUSES=[{id:"todo",name:"Не розпочато"},{id:"doing",name:"В роботі"},{id:"done",name:"Виконано"},{id:"issue",name:"Проблема"}];
   const PRIOS={high:"Високий",med:"Середній",low:"Низький"};
   const PRIO_RANK={high:0,med:1,low:2};
-  const BLOCK_ORDER=["Планування","Виробництво","Технологія","Виробничо-технічний відділ","Якість","Обладнання","Постачання і склад","Закупівлі","Персонал","Охорона праці","Кадри","Юридичні питання","Бухгалтерія і фінанси","Адміністрування офісу","HR і розвиток персоналу","Управління"];
+  const BLOCK_ORDER=["Планування","Виробництво","Технологія","Виробничо-технічний відділ","Якість","ВТК №1","ВТК №2","Обладнання","Постачання і склад","Закупівлі","Персонал","Охорона праці","Кадри","Юридичні питання","Бухгалтерія і фінанси","Адміністрування офісу","HR і розвиток персоналу","Управління"];
   const MIN_PW=10, ITER=310000;
 
   const $=s=>document.querySelector(s);
@@ -331,7 +331,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     clearSession();
     unsubs.forEach(u=>{try{u()}catch(e){}});unsubs=[];
     if(unsubVault){try{unsubVault()}catch(e){}unsubVault=null}
-    tasks=[];plans={};staff={};loaded=false;boxCache.clear();tkCache.clear();
+    tasks=[];plans={};staff={};loaded=false;renameDone=false;boxCache.clear();tkCache.clear();
     closeAll();
     try{await fb.signOut()}catch(e){}
     show("#loginScreen");
@@ -434,6 +434,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       for(const d of docs){const t=await decodeDoc(d.id,d.data);if(t)out.push(t)}
       if(seq!==snapSeq||!role)return;
       tasks=out;loaded=true;render(false);
+      if(isDir()&&!renameDone)setTimeout(runRenames,2500);
     },err=>{loaded=true;render(true);toast("Немає доступу до задач: "+((err&&err.code)||"помилка"))}));
     const deptDocs=isDir()?DEPTS.map(d=>d.id):[role];
     deptDocs.forEach(d=>{
@@ -490,6 +491,31 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     Object.assign(t,fields);stamp(t);
     enqueue(t.id,()=>writeCore(t,false)).catch(writeErr);
   }
+  /* ---------- rename: ВТК металу → ВТК №1, ВТК електроніки → ВТК №2 (idempotent) ---------- */
+  const RENAMES=[["ВТК металу","ВТК №1"],["ВТК електроніки","ВТК №2"]];
+  const renameStr=v=>{let o=String(v||"");RENAMES.forEach(([a,b])=>{o=o.split(a).join(b)});return o};
+  let renameDone=false;
+  function runRenames(){
+    if(renameDone||!isDir()||!loaded)return;renameDone=true;
+    tasks.forEach(t=>{
+      let ch=false;
+      const nb=renameStr(t.block);if(nb!==t.block){t.block=nb;ch=true}
+      t.assignees.forEach(a=>{const np=renameStr(a.position);if(np!==a.position){a.position=np;ch=true}});
+      if(ch){stamp(t);enqueue(t.id,()=>writeCore(t,false)).catch(()=>{})}
+    });
+    DEPTS.forEach(d=>{
+      const list=staff[d.id]||[];let ch=false;
+      list.forEach(p=>{const np=renameStr(p.position);if(np!==p.position){p.position=np;ch=true}});
+      if(ch)saveStaff(d.id);
+      const pl=plans[d.id];
+      if(pl&&pl.text&&renameStr(pl.text)!==pl.text){
+        const obj={text:renameStr(pl.text),period:pl.period||""},at=new Date().toISOString();
+        plans[d.id]=Object.assign({},obj,{updatedAt:at});
+        enqueue("plan-"+d.id,async()=>{const box=await sealObj(keys[d.id],obj);await fb.set("plans/"+d.id,{iv:box.iv,ct:box.ct,updatedAt:at,updatedBy:role})}).catch(()=>{});
+      }
+    });
+  }
+
   /* ---------- people directory ---------- */
   function saveStaff(d){
     if(!isDir()||!keys[d])return Promise.resolve();
@@ -1048,9 +1074,9 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       (staff[d]=staff[d]||[]).push(upd);saveStaff(d);
     }else{
       const dup=(staff[d]||[]).find(x=>x.name.toLowerCase()===name.toLowerCase());
-      if(dup){$("#pfErr").textContent="Картка з таким ПІБ у цьому підрозділі вже є.";return}
-      pid=uid();
-      (staff[d]=staff[d]||[]).push({id:pid,name,position:pos,phone,note});saveStaff(d);
+      if(dup&&staffForm.mode!=="link"){$("#pfErr").textContent="Картка з таким ПІБ у цьому підрозділі вже є.";return}
+      if(dup){pid=dup.id}
+      else{pid=uid();(staff[d]=staff[d]||[]).push({id:pid,name,position:pos,phone,note});saveStaff(d)}
     }
     const link=staffForm.mode==="link"?staffForm.link:null;
     const n=applyPerson(pid,link?(a=>a.dept===link.dept&&(a.position||"")===link.position&&(a.name||"")===link.name):null);
@@ -1148,11 +1174,37 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     {block:"Закупівлі",primary:A,title:"Проаналізувати витрати на закупівлі за квартал і запропонувати, де зекономити",prio:"med",w:6,owners:[[A,MZ],[A,"Бухгалтер-експерт"]]},
     {block:"Закупівлі",primary:A,title:"Звітувати директору про закупівлі: сума, економія, проблемні постачальники",prio:"med",w:1,repeat:"щомісяця",owners:[[A,MZ]]}
   ];
+  const QM="Начальник ВТК №1", QE="Начальник ВТК №2";
+  const QC_TASKS=[
+    {block:"ВТК №1",title:"Затвердити плани контролю на основні деталі: контрольовані розміри, методи, частота вимірювань",prio:"high",w:3,owners:[[V,QM],[V,"Начальник виробничо-технічного відділу"]]},
+    {block:"ВТК №1",title:"Запровадити вхідний контроль металопрокату: сертифікати, марка сталі, геометрія, стан поверхні",prio:"high",w:2,owners:[[V,QM],[A,"Менеджер із закупівель"]]},
+    {block:"ВТК №1",title:"Контролювати першу деталь після кожного переналагодження верстата із записом у журнал",prio:"high",w:1,owners:[[V,QM],[V,"Майстер дільниці"]]},
+    {block:"ВТК №1",title:"Скласти перелік вимірювального інструменту й графік його повірки та калібрування",prio:"high",w:2,owners:[[V,QM]]},
+    {block:"ВТК №1",title:"Вести журнал невідповідностей: деталь, дефект, причина, рішення (брак чи доопрацювання)",prio:"high",w:1,repeat:"щотижня",owners:[[V,QM]]},
+    {block:"ВТК №1",title:"Облаштувати ізолятор браку: позначене місце й порядок поводження з невідповідною продукцією",prio:"med",w:2,owners:[[V,QM],[V,"Майстер дільниці"]]},
+    {block:"ВТК №1",title:"Встановити критерії приймання зварних швів і покриттів із фотофіксацією дефектів",prio:"med",w:3,owners:[[V,QM]]},
+    {block:"ВТК №1",title:"Оформлювати паспорти якості на продукцію, що відвантажується",prio:"med",w:2,owners:[[V,QM]]},
+    {block:"ВТК №1",title:"Аналізувати брак за причинами щомісяця й передавати висновки у ВТВ",prio:"med",w:4,repeat:"щомісяця",owners:[[V,QM],[V,"Начальник виробничо-технічного відділу"]]},
+    {block:"ВТК №1",title:"Навчити операторів самоконтролю: що й чим вимірювати на робочому місці",prio:"low",w:6,owners:[[V,QM],[V,"Майстер дільниці"]]},
+    {block:"ВТК №2",title:"Запровадити вхідний контроль електронних компонентів: маркування, документи, перевірка на підробки",prio:"high",w:2,owners:[[V,QE],[A,"Менеджер із закупівель"]]},
+    {block:"ВТК №2",title:"Організувати захист від статики (ESD) на дільницях: браслети, килимки, заземлення, щоденна перевірка",prio:"high",w:2,owners:[[V,QE]]},
+    {block:"ВТК №2",title:"Затвердити критерії візуального контролю паяння (наприклад, за IPC-A-610) і зразки дефектів",prio:"high",w:3,owners:[[V,QE]]},
+    {block:"ВТК №2",title:"Розробити методики функціонального тестування плат і виробів та форми протоколів",prio:"high",w:4,owners:[[V,QE],[V,"Начальник виробничо-технічного відділу"]]},
+    {block:"ВТК №2",title:"Запровадити вихідний контроль перед відвантаженням за чек-листом із протоколом",prio:"high",w:2,owners:[[V,QE]]},
+    {block:"ВТК №2",title:"Вести облік дефектів по платах: тип дефекту, операція, виконавець",prio:"med",w:1,repeat:"щотижня",owners:[[V,QE]]},
+    {block:"ВТК №2",title:"Скласти графік повірки контрольно-вимірювальних приладів: мультиметри, осцилографи, джерела живлення",prio:"med",w:2,owners:[[V,QE]]},
+    {block:"ВТК №2",title:"Контролювати умови зберігання компонентів: температура, вологість, сухі шафи для чутливих до вологи",prio:"med",w:3,owners:[[V,QE],[V,"Комірник"]]},
+    {block:"ВТК №2",title:"Забезпечити простежуваність: серійні номери плат і прив'язка до партій компонентів",prio:"med",w:4,owners:[[V,QE]]},
+    {block:"ВТК №2",title:"Щомісяця аналізувати відмови й повернення від клієнтів і готувати висновки",prio:"med",w:4,repeat:"щомісяця",owners:[[V,QE],[V,"Начальник виробничо-технічного відділу"]]},
+    {block:"Якість",title:"Готувати щотижневий звіт ВТК директору: рівень браку, основні дефекти, вжиті заходи",prio:"high",w:1,repeat:"щотижня",owners:[[V,QM],[V,QE]]}
+  ];
+  const QC_PLAN={dept:V,marker:"ВТК №1:",text:"ВТК №1: плани контролю на основні деталі, вхідний контроль металу, журнал невідповідностей і графік повірки інструменту — протягом місяця.\nВТК №2: захист від статики, критерії паяння, методики тестування й вихідний контроль — протягом місяця.\nЦільовий рівень браку встановити після першого місяця обліку."};
   function prodTemplate(){
     return (window.SEED_TASKS||[]).map(x=>({block:x.block,title:x.title,prio:x.prio||"med",due:x.due||"",repeat:x.repeat||"",owners:x.owner?[[x.dept,x.owner]]:[],primary:x.dept}));
   }
   const TEMPLATES=[
     {id:"administratsiia",name:"Адміністрація",desc:"Кадри, юрист, бухгалтерія, адміністратор офісу, HR. Частина задач спільна з виробництвом.",primary:A,get:()=>ADMIN_TEMPLATE.tasks,plan:ADMIN_TEMPLATE.plan},
+    {id:"qc",name:"ВТК №1 і ВТК №2",desc:"ВТК №1 — контроль металообробки, ВТК №2 — контроль електроніки. Цілі ВТК допишуться окремими пунктами до плану виробництва, наявний текст плану не зміниться.",primary:V,get:()=>QC_TASKS,plan:null,planAppend:QC_PLAN},
     {id:"vtv",name:"Виробничо-технічний відділ і закупівлі",desc:"Начальник ВТВ і помічник (Виробництво), менеджер із закупівель (Адміністрація). Частина задач спільна з цехом, бухгалтерією та юристом.",primary:V,get:()=>VTV_TASKS,plan:null},
     {id:"vyrobnytstvo",name:"Виробництво",desc:"24 стартові задачі цеху (ті, що додавались під час першого налаштування).",primary:V,get:prodTemplate,plan:null}
   ];
@@ -1178,7 +1230,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       const shared=all.filter(x=>new Set((x.owners||[]).map(o=>o[0]).concat([x.primary||tp.primary])).size>1).length;
       return `<section class="tpl"><div class="tpl-h"><div><h3>${esc(tp.name)}</h3><p class="note">${esc(tp.desc)}</p></div>
         <button class="btn primary" type="button" data-tpl="${tp.id}" ${miss.length&&!tplBusy?"":"disabled"}>${miss.length?"Додати "+miss.length+" задач":"Уже додано"}</button></div>
-        <div class="tpl-meta"><span>Усього в шаблоні: ${all.length}</span>${shared?`<span>Спільних з іншим підрозділом: ${shared}</span>`:""}${tp.plan?`<span>Містить план підрозділу${plans[tp.primary]&&plans[tp.primary].text?" (у вас уже є план — його не змінимо)":""}</span>`:""}</div>
+        <div class="tpl-meta"><span>Усього в шаблоні: ${all.length}</span>${shared?`<span>Спільних з іншим підрозділом: ${shared}</span>`:""}${tp.planAppend?`<span>Доповнить план виробництва${plans[tp.planAppend.dept]&&String(plans[tp.planAppend.dept].text||"").includes(tp.planAppend.marker)?" (уже доповнено)":""}</span>`:""}${tp.plan?`<span>Містить план підрозділу${plans[tp.primary]&&plans[tp.primary].text?" (у вас уже є план — його не змінимо)":""}</span>`:""}</div>
         <details><summary>Переглянути задачі</summary><ul class="tpl-list">${all.map(x=>`<li><span class="tpl-blk">${esc(x.block)}</span> ${esc(x.title)} <span class="note">— ${esc((x.owners||[]).map(o=>o[1]).join(", "))}</span></li>`).join("")}</ul></details></section>`;
     }).join("");
   }
@@ -1198,6 +1250,14 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
         stamp(t);
         await enqueue(t.id,()=>writeCore(t,true));
         done++;b.textContent="Додано "+done+" з "+miss.length+"…";
+      }
+      if(tp.planAppend){
+        const pa=tp.planAppend, cur=plans[pa.dept]||{};
+        if(!String(cur.text||"").includes(pa.marker)){
+          const at=new Date().toISOString(), obj={text:(cur.text?cur.text.trim()+"\n\n":"")+pa.text,period:cur.period||""};
+          plans[pa.dept]=Object.assign({},obj,{updatedAt:at});
+          await enqueue("plan-"+pa.dept,async()=>{const box=await sealObj(keys[pa.dept],obj);await fb.set("plans/"+pa.dept,{iv:box.iv,ct:box.ct,updatedAt:at,updatedBy:role})});
+        }
       }
       if(tp.plan&&!(plans[tp.primary]&&plans[tp.primary].text)){
         const at=new Date().toISOString(), obj={text:tp.plan.text,period:tp.plan.period};
