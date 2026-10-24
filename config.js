@@ -2,12 +2,12 @@
 
 /* 1. Вставте сюди блок firebaseConfig із консолі Firebase (значення в лапках). */
 window.FIREBASE_CONFIG = {
-  apiKey: "ВСТАВТЕ_СЮДИ",
-  authDomain: "ВСТАВТЕ_СЮДИ",
-  projectId: "ВСТАВТЕ_СЮДИ",
-  storageBucket: "ВСТАВТЕ_СЮДИ",
-  messagingSenderId: "ВСТАВТЕ_СЮДИ",
-  appId: "ВСТАВТЕ_СЮДИ"
+  apiKey: "AIzaSyAr0sNAYTvTh_wZEuXJdRY28FckpeRNvRs",
+  authDomain: "zadachi-62ee3.firebaseapp.com",
+  projectId: "zadachi-62ee3",
+  storageBucket: "zadachi-62ee3.firebasestorage.app",
+  messagingSenderId: "868159481378",
+  appId: "1:868159481378:web:73fa5c72eed23745984c7b"
 };
 
 /* 2. Логіни трьох розділів. Створіть у Firebase користувачів саме з такими адресами.
