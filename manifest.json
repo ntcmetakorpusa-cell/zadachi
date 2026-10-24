@@ -1,11 +1,11 @@
 {
- "name": "Задачі підприємства",
- "short_name": "Задачі",
+ "name": "НТЦ МЕТА · Задачі",
+ "short_name": "НТЦ МЕТА",
  "start_url": ".",
  "scope": ".",
  "display": "standalone",
  "background_color": "#eef1f4",
- "theme_color": "#2c5aa0",
+ "theme_color": "#263c51",
  "lang": "uk",
  "icons": [
   {
