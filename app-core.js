@@ -32,6 +32,53 @@ window.startApp=function(fb){
   const stName=id=>(STATUSES.find(s=>s.id===id)||STATUSES[0]).name;
   const uid=()=>"a"+Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
   const personLabel=a=>(a.position||"")+(a.name?(a.position?" · ":"")+a.name:"")||"Без імені";
+  const ENTRY_TYPES=[{id:"report",name:"Звіт про виконання"},{id:"info",name:"Інформація"},{id:"question",name:"Питання до директора"},{id:"issue",name:"Проблема"},{id:"idea",name:"Пропозиція"}];
+  const typeName=id=>(ENTRY_TYPES.find(x=>x.id===id)||ENTRY_TYPES[0]).name;
+  const PROGRESS=[0,10,25,50,75,90,100];
+  const roleName=r=>(ROLES[r]||{}).name||"";
+
+  /* styles for the task card and report history (kept here so an update touches one file) */
+  (function(){
+    if(document.getElementById("zv-v2"))return;
+    const st=document.createElement("style");st.id="zv-v2";
+    st.textContent=`
+tr.row{cursor:pointer}
+tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-soft) 55%,transparent)}
+.title-btn.big{font-size:14.5px;display:inline-flex;gap:6px;align-items:flex-start}
+.title-btn.big svg{width:14px;height:14px;flex:none;margin-top:4px;opacity:.55}
+.open-hint{display:block;font-size:12px;color:var(--accent);font-weight:600;margin-top:4px}
+.asg-last{font-size:13px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.prog-wrap{display:flex;align-items:center;gap:8px}
+.prog{flex:1;max-width:160px;height:6px;border-radius:999px;background:var(--todo-bg);overflow:hidden}
+.prog span{display:block;height:100%;background:var(--accent)}
+.prog-l{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+.etype{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.02em;border-radius:4px;padding:1px 7px;white-space:nowrap;vertical-align:1px}
+.et-report{background:var(--done-bg);color:var(--done)}
+.et-info{background:var(--accent-soft);color:var(--accent)}
+.et-question{background:var(--doing-bg);color:var(--doing)}
+.et-issue{background:var(--issue-bg);color:var(--issue)}
+.et-idea{background:var(--todo-bg);color:var(--todo)}
+.rep{gap:12px}
+.rep.mine{border-color:var(--accent);background:var(--surface)}
+.mine-tag{font-size:11.5px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:4px;padding:1px 8px}
+.rep-ctrl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.rep-ctrl select.pill{width:100%;padding:8px 26px 8px 10px;border-radius:8px;font-size:13.5px}
+.rep-new{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+.rep-new-row{display:flex;gap:8px;flex-wrap:wrap}
+.rep-new-row select{flex:0 1 240px}
+.rep-new textarea{width:100%;min-height:84px;resize:vertical;line-height:1.45}
+.rep-ro{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto}
+.hist li{border-left:3px solid var(--line-strong);padding:4px 0 4px 10px}
+.hist-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hist-t{white-space:pre-wrap;font-size:13.5px;line-height:1.5;margin-top:3px}
+@media (max-width:600px){
+  dialog{width:100vw;max-width:100vw;height:100%;max-height:100%;margin:0;border-radius:0;border:0}
+  .rep-ctrl{grid-template-columns:1fr 1fr}
+  .rep-ctrl .fl:first-child{grid-column:1/-1}
+}`;
+    document.head.appendChild(st);
+  })();
 
   /* ---------- crypto ---------- */
   const TE=new TextEncoder(), TD=new TextDecoder();
@@ -255,6 +302,13 @@ window.startApp=function(fb){
     for(const aid of Object.keys(doc.rep||{})){const b=doc.rep[aid];const o=await openObj(k.tk,b);if(o)reps[aid]=Object.assign({},o,{at:b.at||"",by:b.by||""})}
     return mk(id,doc,core,reps,k);
   }
+  const repPayload=r=>({status:r.status||"todo",progress:Number(r.progress)||0,eta:r.eta||"",entries:Array.isArray(r.entries)?r.entries:[],note:r.note||""});
+  function entriesOf(r){
+    const e=Array.isArray(r.entries)?r.entries.slice():[];
+    if(r.note)e.push({id:"legacy",at:r.at||"",by:r.by||"",type:"report",text:r.note});
+    return e.sort((a,b)=>String(b.at||"").localeCompare(String(a.at||"")));
+  }
+  const lastEntry=r=>entriesOf(r)[0]||null;
   function overall(t){
     if(!t.assignees.length)return t.coreStatus||"todo";
     const s=t.assignees.map(a=>(t.reps[a.id]||{}).status||"todo");
@@ -276,7 +330,7 @@ window.startApp=function(fb){
       const rep={},ids=new Set(t.assignees.map(a=>a.id));
       for(const aid of Object.keys(t.reps)){
         if(!ids.has(aid))continue;const r=t.reps[aid];
-        const b=await sealObj(t.tk,{status:r.status||"todo",note:r.note||""});
+        const b=await sealObj(t.tk,repPayload(r));
         rep[aid]={iv:b.iv,ct:b.ct,at:r.at||"",by:r.by||""};
       }
       base.rep=rep;
@@ -287,7 +341,7 @@ window.startApp=function(fb){
   async function writeRep(t,aid){
     if(!t.tk){await writeCore(t,true);return}
     const r=t.reps[aid];
-    const b=await sealObj(t.tk,{status:r.status||"todo",note:r.note||""});
+    const b=await sealObj(t.tk,repPayload(r));
     await fb.merge("tasks/"+t.id,{rep:{[aid]:{iv:b.iv,ct:b.ct,at:r.at||"",by:r.by||""}},updatedAt:t.updatedAt||"",updatedBy:t.updatedBy||""});
   }
 
@@ -332,6 +386,19 @@ window.startApp=function(fb){
     t.reps[aid]=Object.assign({status:"todo",note:""},t.reps[aid],fields,{at:new Date().toISOString(),by:role});
     stamp(t);
     enqueue(t.id,()=>writeRep(t,aid)).catch(writeErr);
+  }
+  function addEntry(id,aid,type,text){
+    const t=tasks.find(x=>x.id===id);if(!t)return false;
+    const a=t.assignees.find(x=>x.id===aid);
+    if(!canRep(t,a)){toast("Цей звіт заповнює інший підрозділ.");return false}
+    const r=Object.assign({status:"todo"},t.reps[aid]||{});
+    const entries=entriesOf(r).map(e=>e.id==="legacy"?Object.assign({},e,{id:uid()}):e);
+    entries.unshift({id:uid(),at:new Date().toISOString(),by:role,type,text});
+    const f={entries,note:""};
+    if(type==="issue")f.status="issue";
+    else if(r.status==="todo")f.status="doing";
+    setRep(id,aid,f);
+    return true;
   }
   function setCore(id,fields){
     const t=tasks.find(x=>x.id===id);if(!t||!canEditAll())return;
@@ -395,12 +462,16 @@ window.startApp=function(fb){
   }
   const multi=t=>t.depts.length>1;
   function who(a,t){return `<span class="asg-who"><b>${esc(a.position||"Відповідальний")}</b>${a.name?" "+esc(a.name):' <span class="note">ПІБ не вказано</span>'}${multi(t)?` <span class="dtag">${esc(deptName(a.dept))}</span>`:""}</span>`}
-  function asgBlock(t,a,inline){
-    const r=t.reps[a.id]||{}, st=r.status||"todo", ok=canRep(t,a);
-    const note=inline&&ok
-      ?`<textarea class="cell-in" rows="1" data-act="rnote" data-id="${esc(t.id)}" data-aid="${esc(a.id)}" placeholder="Ваш звіт: що зроблено, стан, ціни, місце…" aria-label="Звіт: ${esc(personLabel(a))}">${esc(r.note||"")}</textarea>`
-      :(r.note?`<div class="asg-note">${esc(r.note)}</div>`:`<div class="note">Звіту ще немає</div>`);
-    return `<div class="asg"><div class="asg-h">${who(a,t)}${statusSel(st,`data-act="rstatus" data-id="${esc(t.id)}" data-aid="${esc(a.id)}"`,ok,"sm")}</div>${note}${r.at?`<span class="upd">оновлено ${fmtStamp(r.at)}</span>`:""}</div>`;
+  function progBar(r){
+    const p=Number(r.progress)||0;
+    if(!p&&!r.eta)return"";
+    return `<div class="prog-wrap">${p?`<div class="prog"><span style="width:${p}%"></span></div><span class="prog-l">${p}%</span>`:""}${r.eta?`<span class="prog-l">до ${fmtDate(r.eta)}</span>`:""}</div>`;
+  }
+  function asgBlock(t,a){
+    const r=t.reps[a.id]||{}, st=r.status||"todo", es=entriesOf(r), le=es[0];
+    return `<div class="asg"><div class="asg-h">${who(a,t)}${statusPill(st)}</div>${progBar(r)}
+      ${le?`<div class="asg-last"><span class="etype et-${esc(le.type)}">${esc(typeName(le.type))}</span> ${esc(le.text)}</div><span class="upd">${fmtStamp(le.at)}${le.by?" · "+esc(roleName(le.by)):""}${es.length>1?" · усього записів: "+es.length:""}</span>`
+        :`<div class="note">Записів ще немає${canRep(t,a)?" — відкрийте задачу, щоб додати":""}</div>`}</div>`;
   }
   function renderDepts(){
     if(!isDir())return;
@@ -474,9 +545,9 @@ window.startApp=function(fb){
         const g=list.filter(x=>((showDept?x.primary+"|":"")+(x.block||""))===key);const d=g.filter(x=>overall(x)==="done").length;
         html+=`<tr class="group"><td colspan="5">${showDept?esc(deptName(t.primary))+" · ":""}${esc(t.block||"Без блоку")}<span class="gmeta">${d} з ${g.length} виконано</span></td></tr>`;
       }
-      html+=`<tr class="row">
-        <td><button type="button" class="title-btn" data-act="open" data-id="${esc(t.id)}">${esc(t.title)}</button>${t.repeat?` <span class="repeat">${esc(t.repeat)}</span>`:""}${multi(t)?' <span class="repeat">спільна</span>':""}${t.comment?`<span class="dnote">Примітка директора: ${esc(t.comment)}</span>`:""}</td>
-        <td>${t.assignees.length?t.assignees.map(a=>asgBlock(t,a,true)).join(""):`<span class="note">Відповідальних не призначено${ed?" — відкрийте задачу, щоб додати":""}</span>`}</td>
+      html+=`<tr class="row" data-open="${esc(t.id)}" tabindex="0">
+        <td><button type="button" class="title-btn big" data-act="open" data-id="${esc(t.id)}">${esc(t.title)}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>${t.repeat?` <span class="repeat">${esc(t.repeat)}</span>`:""}${multi(t)?' <span class="repeat">спільна</span>':""}${t.comment?`<span class="dnote">Примітка директора: ${esc(t.comment)}</span>`:""}</td>
+        <td>${t.assignees.length?t.assignees.map(a=>asgBlock(t,a)).join(""):`<span class="note">Відповідальних не призначено${ed?" — відкрийте задачу, щоб додати":""}</span>`}</td>
         <td>${ed?`<input type="date" class="cell-in ${isOverdue(t)?"overdue":""}" data-act="due" data-id="${esc(t.id)}" value="${esc(t.due||"")}" aria-label="Термін">${t.repeat?`<span class="repeat">${esc(t.repeat)}</span>`:""}`:dueText(t)}</td>
         <td>${prioCell(t)}</td>
         <td>${statusPill(overall(t))}</td>
@@ -489,7 +560,7 @@ window.startApp=function(fb){
     return `<div class="board">${STATUSES.map(s=>{
       const items=list.filter(t=>overall(t)===s.id).sort((a,b)=>(PRIO_RANK[a.prio]??1)-(PRIO_RANK[b.prio]??1)||String(a.due||"9").localeCompare(String(b.due||"9")));
       return `<div class="col"><div class="col-h">${statusPill(s.id)}<span class="n">${items.length}</span></div>${
-        items.map(t=>`<article class="card">
+        items.map(t=>`<article class="card" data-open="${esc(t.id)}" style="cursor:pointer">
           <span class="blk">${showDept?`<span class="dtag">${esc(deptName(t.primary))}</span>`:""}${esc(t.block||"")}${multi(t)?'<span class="dtag">спільна</span>':""}</span>
           <button type="button" class="title-btn" data-act="open" data-id="${esc(t.id)}">${esc(t.title)}</button>
           <div class="chips">${t.assignees.map(a=>`<span class="chip"><span class="dot" style="background:var(--${(t.reps[a.id]||{}).status||"todo"})"></span>${esc(personLabel(a))}</span>`).join("")||'<span class="note">Без відповідальних</span>'}</div>
@@ -513,19 +584,24 @@ window.startApp=function(fb){
       return `<section class="panel owner-card"><div class="owner-h"><h3>${esc(o)}</h3><span class="m">${dept?esc(dept)+" · ":""}${d}/${items.length} виконано${iss?` · <span style="color:var(--issue)">${iss} проблем</span>`:""}${ov?` · <span style="color:var(--issue)">${ov} простр.</span>`:""}</span></div>
       <ul class="olist">${items.map(({t,a})=>{
         const r=a?(t.reps[a.id]||{}):{};
-        return `<li><button type="button" class="title-btn" data-act="open" data-id="${esc(t.id)}">${esc(t.title)}</button>${a?statusSel(r.status||"todo",`data-act="rstatus" data-id="${esc(t.id)}" data-aid="${esc(a.id)}"`,canRep(t,a),"sm"):statusPill(overall(t))}
-        <div class="sub"><span>${esc(t.block||"")}</span>${dueText(t)}${prioBadge(t.prio)}${t.assignees.length>1?`<span>разом з: ${esc(t.assignees.filter(x=>x!==a).map(personLabel).join(", "))}</span>`:""}</div>${r.note?`<div class="sub asg-note">${esc(r.note)}</div>`:""}</li>`;
+        const le=a?lastEntry(r):null;
+        return `<li data-open="${esc(t.id)}" style="cursor:pointer"><button type="button" class="title-btn" data-act="open" data-id="${esc(t.id)}">${esc(t.title)}</button>${a?statusPill(r.status||"todo"):statusPill(overall(t))}
+        <div class="sub"><span>${esc(t.block||"")}</span>${dueText(t)}${prioBadge(t.prio)}${a&&r.progress?`<span class="mono">${Number(r.progress)}%</span>`:""}${t.assignees.length>1?`<span>разом з: ${esc(t.assignees.filter(x=>x!==a).map(personLabel).join(", "))}</span>`:""}</div>${le?`<div class="sub asg-last"><span class="etype et-${esc(le.type)}">${esc(typeName(le.type))}</span> ${esc(le.text)}</div>`:""}</li>`;
       }).join("")}</ul></section>`;
     }).join("")}</div>`;
   }
   function renderDirector(){
-    const iss=scopeTasks().filter(t=>overall(t)==="issue").sort(sortTasks);
+    const rows=[];
+    scopeTasks().sort(sortTasks).forEach(t=>t.assignees.forEach(a=>{
+      const r=t.reps[a.id]||{}, le=lastEntry(r);
+      if((r.status==="issue")||(le&&le.type==="question"))rows.push({t,a,r,le});
+    }));
     $("#director").innerHTML=`<h2>Питання до директора</h2>${
-      iss.length?`<ul>${iss.map(t=>{
-        const w=t.assignees.filter(a=>(t.reps[a.id]||{}).status==="issue");
-        return `<li>${statusPill("issue")}<button type="button" class="title-btn" data-act="open" data-id="${esc(t.id)}">${esc(t.title)}</button><span class="c">${w.map(a=>esc(personLabel(a))+((t.reps[a.id]||{}).note?" — "+esc(t.reps[a.id].note):"")).join("; ")}</span></li>`;
+      rows.length?`<ul>${rows.map(({t,a,r,le})=>{
+        const kind=r.status==="issue"?statusPill("issue"):`<span class="etype et-question">Питання</span>`;
+        return `<li>${kind}<button type="button" class="title-btn" data-act="open" data-id="${esc(t.id)}">${esc(t.title)}</button><span class="c">${esc(personLabel(a))}${le?" — "+esc(le.text):""}</span></li>`;
       }).join("")}</ul>`
-      :`<p>${isDir()?"Тут з'являються задачі, де відповідальний поставив статус «Проблема». Зараз таких немає.":"Якщо задача застрягла, поставте свій статус «Проблема» й опишіть у звіті, яке рішення потрібне. Вона з'явиться тут і в директора."}</p>`}`;
+      :`<p>${isDir()?"Тут з'являються задачі зі статусом «Проблема» та записи типу «Питання до директора». Зараз таких немає.":"Якщо задача застрягла, відкрийте її та додайте запис «Проблема» або «Питання до директора». Він з'явиться тут і в директора."}</p>`}`;
   }
 
   let pendingRender=false;
@@ -577,7 +653,12 @@ window.startApp=function(fb){
   });
   view.addEventListener("input",e=>{if(e.target.matches("textarea.cell-in"))autoGrow(e.target)});
   document.addEventListener("focusout",()=>{setTimeout(()=>{if(pendingRender&&!editingInside())render(true)},50)});
-  document.addEventListener("click",e=>{const b=e.target.closest('[data-act="open"]');if(b)openDlg(b.dataset.id)});
+  document.addEventListener("click",e=>{
+    const b=e.target.closest('[data-act="open"]');if(b){openDlg(b.dataset.id);return}
+    if(e.target.closest("input,select,textarea,label,a,dialog"))return;
+    const row=e.target.closest("[data-open]");if(row)openDlg(row.dataset.open);
+  });
+  document.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.matches&&e.target.matches("tr.row[data-open]"))openDlg(e.target.dataset.open)});
 
   /* ---------- task dialog ---------- */
   const dlg=$("#dlg"); let editId=null;
@@ -608,16 +689,47 @@ window.startApp=function(fb){
       if(p&&!row.querySelector(".a-pos").value)row.querySelector(".a-pos").value=p.position;
     }
   });
-  function repSection(t){
-    if(!t)return `<p class="note">Звіти відповідальних з'являться тут після збереження задачі.</p>`;
-    if(!t.assignees.length)return "";
-    return `<div class="fl"><label>Звіти відповідальних</label><div class="reps">${t.assignees.map(a=>{
-      const r=t.reps[a.id]||{}, ok=canRep(t,a);
-      return `<div class="rep" data-aid="${esc(a.id)}"><div class="asg-h">${who(a,t)}${statusSel(r.status||"todo",'data-r="status"',ok,"sm")}</div>
-        <textarea class="field r-note" rows="3" placeholder="${ok?"Ваш звіт: що зроблено, стан, ціни, місце розташування…":"Звіту ще немає"}" ${ok?"":"disabled"}>${esc(r.note||"")}</textarea>
-        ${r.at?`<span class="upd">оновлено ${fmtStamp(r.at)}${r.by?" · "+esc((ROLES[r.by]||{}).name||""):""}</span>`:""}</div>`;
-    }).join("")}</div></div>`;
+  function repCard(t,a){
+    const r=t.reps[a.id]||{}, ok=canRep(t,a), st=r.status||"todo", es=entriesOf(r), aid=esc(a.id);
+    const controls=ok?`<div class="rep-ctrl">
+        <div class="fl"><label>Статус</label>${statusSel(st,`data-r="status" data-aid="${aid}"`,true,"")}</div>
+        <div class="fl"><label>Готовність</label><select class="field" data-r="progress" data-aid="${aid}">${PROGRESS.map(p=>`<option value="${p}" ${p===(Number(r.progress)||0)?"selected":""}>${p}%</option>`).join("")}</select></div>
+        <div class="fl"><label>Очікувана дата</label><input type="date" class="field mono" data-r="eta" data-aid="${aid}" value="${esc(r.eta||"")}"></div>
+      </div>
+      <div class="rep-new">
+        <label style="font-size:12px;font-weight:700;color:var(--muted)">Новий запис</label>
+        <div class="rep-new-row"><select class="field" data-r="type" aria-label="Тип запису">${ENTRY_TYPES.map(x=>`<option value="${x.id}">${x.name}</option>`).join("")}</select></div>
+        <textarea class="field" data-r="text" placeholder="Напишіть, що зроблено, стан, ціни, місце розташування, що заважає…" aria-label="Текст запису"></textarea>
+        <div><button class="btn primary" type="button" data-addentry="${aid}">Додати запис</button></div>
+      </div>`
+      :`<div class="rep-ro">${statusPill(st)}${progBar(r)}</div>`;
+    const hist=es.length?`<ul class="hist">${es.map(e=>`<li><div class="hist-h"><span class="etype et-${esc(e.type)}">${esc(typeName(e.type))}</span><span class="upd">${fmtStamp(e.at)}${e.by?" · "+esc(roleName(e.by)):""}</span></div><div class="hist-t">${esc(e.text)}</div></li>`).join("")}</ul>`:`<p class="note">Записів ще немає.</p>`;
+    return `<section class="rep ${ok&&!isDir()?"mine":""}" data-aid="${aid}"><div class="asg-h">${who(a,t)}${ok&&!isDir()?'<span class="mine-tag">ваш розділ</span>':""}</div>${controls}<div class="fl"><label>Історія записів</label>${hist}</div></section>`;
   }
+  function repSection(t){
+    if(!t)return `<p class="note">Статуси й записи відповідальних з'являться тут після збереження задачі.</p>`;
+    if(!t.assignees.length)return "";
+    const list=t.assignees.slice().sort((x,y)=>(canRep(t,y)&&!isDir()?1:0)-(canRep(t,x)&&!isDir()?1:0));
+    return `<div class="fl"><label>Відповідальні: статуси та записи</label><div class="reps">${list.map(a=>repCard(t,a)).join("")}</div></div>`;
+  }
+  $("#repSection").addEventListener("change",e=>{
+    const el=e.target, k=el.dataset.r, aid=el.dataset.aid;
+    if(!editId||!aid||!["status","progress","eta"].includes(k))return;
+    const v=k==="progress"?Number(el.value):el.value;
+    setRep(editId,aid,{[k]:v});
+    if(k==="status"){el.className="pill st-"+v;toast("Статус: "+stName(v))}else toast("Збережено");
+  });
+  $("#repSection").addEventListener("click",e=>{
+    const b=e.target.closest("[data-addentry]");if(!b||!editId)return;
+    const sec=b.closest(".rep"), aid=b.dataset.addentry;
+    const ta=sec.querySelector('[data-r="text"]'), type=sec.querySelector('[data-r="type"]').value, text=ta.value.trim();
+    if(!text){ta.focus();toast("Напишіть текст запису.");return}
+    if(addEntry(editId,aid,type,text)){
+      const t=tasks.find(x=>x.id===editId), a=t&&t.assignees.find(x=>x.id===aid);
+      if(t&&a)sec.outerHTML=repCard(t,a);
+      toast("Запис додано");render(true);
+    }
+  });
   function resetDel(show){$("#delWrap").innerHTML=show?`<button class="btn danger" type="button" id="delBtn">Видалити</button>`:""}
   function openDlg(id){
     editId=id||null;
@@ -646,12 +758,12 @@ window.startApp=function(fb){
     }
     $("#repSection").innerHTML=repSection(t);
     const myReps=t?t.assignees.some(a=>canRep(t,a)):false;
-    $("#dlgNote").textContent=full?"Статус задачі складається зі статусів відповідальних. Кожен заповнює свій звіт, а бачать його всі учасники задачі."
-      :(myReps?"Заповніть свій статус і звіт. Звіти інших учасників видно, але змінює їх лише відповідний підрозділ.":"Перегляд задачі.");
+    $("#dlgNote").textContent=full?"Статус, готовність і записи відповідальних зберігаються одразу. Кнопка «Зберегти задачу» зберігає назву, терміни та відповідальних."
+      :(myReps?"Статус, готовність і записи зберігаються одразу. Записи інших учасників видно, але додає їх лише відповідний підрозділ.":"Перегляд задачі.");
     resetDel(!!t&&full);
-    $("#saveBtn").hidden=!(full||myReps);
+    $("#saveBtn").hidden=!full;$("#saveBtn").textContent=t?"Зберегти задачу":"Поставити задачу";
     try{dlg.showModal()}catch(e){dlg.setAttribute("open","")}
-    setTimeout(()=>{const f=full?$("#iTitle"):($("#repSection .r-note:not(:disabled)")||$("#cancelBtn"));if(f)f.focus()},30);
+    setTimeout(()=>{const f=full&&!t?$("#iTitle"):($('#repSection [data-r="text"]')||$("#cancelBtn"));if(f)f.focus()},30);
   }
   function closeDlg(){try{dlg.close()}catch(e){dlg.removeAttribute("open")}}
   $("#cancelBtn").addEventListener("click",closeDlg);
@@ -687,16 +799,12 @@ window.startApp=function(fb){
       });
       const isNew=!t;
       const task=t||{id:fb.newId("tasks"),n:tasks.reduce((m,x)=>Math.max(m,x.n||0),0)+1,reps:{},depts:[],assignees:[],tk:null,tkRaw:null};
-      if(t)collectReps(task);
       Object.assign(task,{title,primary:$("#iDept").value,block:$("#iBlock").value.trim(),due:$("#iDue").value||"",prio:$("#iPrio").value,
         repeat:$("#iRepeat").value,coreStatus:$("#iStatus").value,comment:$("#iComment").value.trim(),assignees:list});
       stamp(task);
       if(isNew)tasks.push(task);
       enqueue(task.id,()=>writeCore(task,true)).then(()=>toast(isNew?"Задачу поставлено":"Збережено"),writeErr);
       addStaff(list);
-    }else if(t){
-      const ch=collectReps(t);
-      if(ch.length){stamp(t);enqueue(t.id,async()=>{for(const aid of ch)await writeRep(t,aid)}).then(()=>toast("Звіт збережено"),writeErr)}
     }
     closeDlg();render(true);
   });
@@ -751,12 +859,13 @@ window.startApp=function(fb){
 
   /* ---------- export ---------- */
   function rows(){
-    const out=[["Підрозділ","Блок","Задача","Посада","ПІБ","Підрозділ відповідального","Термін","Пріоритет","Статус відповідального","Звіт відповідального","Загальний статус"]];
+    const out=[["Підрозділ","Блок","Задача","Посада","ПІБ","Підрозділ відповідального","Термін","Пріоритет","Статус відповідального","Записи відповідального","Загальний статус"]];
     filtered().forEach(t=>{
       const base=[deptName(t.primary),t.block||"",t.title||""];
       const tail=[fmtDate(t.due),PRIOS[t.prio]||""];
       if(!t.assignees.length)out.push(base.concat(["","",""],tail,["","",stName(overall(t))]));
-      t.assignees.forEach(a=>{const r=t.reps[a.id]||{};out.push(base.concat([a.position||"",a.name||"",deptName(a.dept)],tail,[stName(r.status||"todo"),r.note||"",stName(overall(t))]))});
+      t.assignees.forEach(a=>{const r=t.reps[a.id]||{};const es=entriesOf(r).map(e=>fmtStamp(e.at)+" "+typeName(e.type)+": "+e.text);
+        out.push(base.concat([a.position||"",a.name||"",deptName(a.dept)],tail,[stName(r.status||"todo")+(r.progress?" ("+Number(r.progress)+"%)":""),es.join(" | "),stName(overall(t))]))});
     });
     return out;
   }
