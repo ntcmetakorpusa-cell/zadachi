@@ -408,6 +408,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     { const tn=[...$("#settingsBtn").childNodes].reverse().find(n=>n.nodeType===3&&n.textContent.trim());if(tn)tn.textContent=isDir()?" Паролі ":" Мій пароль "; }
     $("#depts").hidden=!isDir();
     $("#staffBtn").hidden=!isDir();
+    $("#notifyBtn").hidden=false;
     $("#tplBtn").hidden=!isDir();
     $("#footNote").textContent=isDir()
       ?"Ви ставите задачі, призначаєте відповідальних з будь-якого підрозділу, задаєте терміни, плани та паролі. Кожен відповідальний пише свій звіт. Дані зашифровані."
@@ -425,12 +426,12 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     render(true);
   }
   async function logout(msg){
-    role=null;keys={};rawKeys={};vault=null;me=null;
+    role=null;keys={};rawKeys={};vault=null;me=null;notifyCfg=null;notifyMap=null;stopLink();
     if(unsubMe){try{unsubMe()}catch(e){}unsubMe=null}
     clearSession();
     unsubs.forEach(u=>{try{u()}catch(e){}});unsubs=[];
     if(unsubVault){try{unsubVault()}catch(e){}unsubVault=null}
-    tasks=[];plans={};staff={};loaded=false;renameDone=false;migrUids.clear();boxCache.clear();tkCache.clear();
+    tasks=[];plans={};staff={};loaded=false;renameDone=false;migrUids.clear();Object.keys(staffSavedAt).forEach(k=>delete staffSavedAt[k]);boxCache.clear();tkCache.clear();
     closeAll();
     try{await fb.signOut()}catch(e){}
     show("#loginScreen");
@@ -438,7 +439,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     $("#loginErr").textContent=msg||"";
   }
   $("#logoutBtn").addEventListener("click",()=>logout(""));
-  function closeAll(){[$("#dlg"),$("#pwDlg"),$("#staffDlg"),$("#tplDlg")].filter(Boolean).forEach(d=>{try{d.close()}catch(e){d.removeAttribute("open")}})}
+  function closeAll(){[$("#dlg"),$("#pwDlg"),$("#staffDlg"),$("#tplDlg"),$("#notifyDlg")].filter(Boolean).forEach(d=>{try{d.close()}catch(e){d.removeAttribute("open")}})}
   function onVault(){
     if(((vault.rev||{}).director||0)!==sessionRev){logout("Пароль директора змінено. Увійдіть з новим паролем.");return}
     renderBanner();
@@ -540,6 +541,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       const out=[];
       for(const d of docs){const t=await decodeDoc(d.id,d.data);if(t)out.push(t)}
       if(seq!==snapSeq||!role)return;
+      if(wantOpen&&out.some(t=>t.id===wantOpen)){const id=wantOpen;wantOpen=null;setTimeout(()=>openDlg(id),50);try{history.replaceState(null,"",location.pathname+location.search)}catch(_){}}
       tasks=out;loaded=true;render(false);
       if(isDir()){
         out.filter(t=>!t.hasUids&&!migrUids.has(t.id)).forEach(t=>{migrUids.add(t.id);enqueue(t.id,()=>writeCore(t,false)).catch(()=>migrUids.delete(t.id))});
@@ -547,15 +549,24 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       }
     },err=>{loaded=true;render(true);toast("Немає доступу до задач: "+((err&&err.code)||"помилка"))}));
     const deptDocs=isDir()?DEPTS.map(d=>d.id):[me.dept];
+    unsubs.push(fb.watchDoc("settings/notify",d=>{notifyCfg=d||null;if($("#notifyDlg").open)renderNotify()},()=>{}));
     deptDocs.forEach(d=>{
       unsubs.push(fb.watchDoc("plans/"+d,async doc=>{
         if(!role)return;
-        if(!doc){delete plans[d]}else{const o=await openObj(keys[d],doc);if(o)plans[d]=Object.assign({},o,{updatedAt:doc.updatedAt})}
+        const sq=snapSeqs["p"+d]=(snapSeqs["p"+d]||0)+1;
+        let o=null;if(doc)o=await openObj(keys[d],doc);
+        if(sq!==snapSeqs["p"+d]||!role)return;
+        if(!doc){delete plans[d]}else if(o)plans[d]=Object.assign({},o,{updatedAt:doc.updatedAt});
         if(editingInside())pendingRender=true;else renderPlans();
       },()=>{}));
       if(isDir()||isHead())unsubs.push(fb.watchDoc("staff/"+d,async doc=>{
         if(!role)return;
-        if(doc){const o=await openObj(keys[d],doc);if(o&&Array.isArray(o.people)){
+        const sq=snapSeqs["s"+d]=(snapSeqs["s"+d]||0)+1;
+        if(doc&&staffSavedAt[d]&&String(doc.updatedAt||"")<staffSavedAt[d])return;
+        let o=null;if(doc)o=await openObj(keys[d],doc);
+        if(sq!==snapSeqs["s"+d]||!role)return;
+        if(doc&&staffSavedAt[d]&&String(doc.updatedAt||"")<staffSavedAt[d])return;
+        if(doc){if(o&&Array.isArray(o.people)){
           let fix=false;
           staff[d]=o.people.map(p=>{if(!p.id){fix=true;return Object.assign({id:uid(),phone:"",note:""},p)}return Object.assign({},p)});
           if(fix&&isDir())saveStaff(d);
@@ -565,7 +576,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       },()=>{}));
     });
   }
-  const migrUids=new Set();
+  const migrUids=new Set(), snapSeqs={}, staffSavedAt={};
   const queues={};
   function enqueue(id,fn){const p=(queues[id]||Promise.resolve()).then(fn,fn);queues[id]=p.catch(()=>{});return p}
   function writeErr(e){
@@ -595,6 +606,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(type==="issue")f.status="issue";
     else if(r.status==="todo")f.status="doing";
     setRep(id,aid,f);
+    notifyChange(t,aid,{kind:"entry",type,text});
     return true;
   }
   function setCore(id,fields){
@@ -633,7 +645,8 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(!isDir()||!keys[d])return Promise.resolve();
     const list=(staff[d]||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,"uk"));
     staff[d]=list;
-    return enqueue("staff-"+d,async()=>{const b=await sealObj(keys[d],{people:list});await fb.set("staff/"+d,{iv:b.iv,ct:b.ct,updatedAt:new Date().toISOString()})}).catch(writeErr);
+    const at=new Date().toISOString();staffSavedAt[d]=at;
+    return enqueue("staff-"+d,async()=>{const b=await sealObj(keys[d],{people:list});await fb.set("staff/"+d,{iv:b.iv,ct:b.ct,updatedAt:at})}).catch(writeErr);
   }
   function findPerson(pid){
     if(!pid)return null;
@@ -654,8 +667,8 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     touched.forEach(saveStaff);
   }
   /* ---------- personal access (director) ---------- */
-  function relinkTasks(pid){
-    const f=findPerson(pid), u=f&&f.p.uid?f.p.uid:"";
+  function relinkTasks(pid,force){
+    const f=findPerson(pid), u=force!==undefined?(force||""):(f&&f.p.uid?f.p.uid:"");
     let n=0;
     tasks.forEach(t=>{
       let ch=false;
@@ -694,7 +707,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(oldUid&&oldUid!==newUid){try{await fb.del("people/"+oldUid)}catch(_){}}
     f.p.uid=newUid;f.p.phone=fmtPhone(digits);
     await saveStaff(f.dept);
-    relinkTasks(pid);
+    relinkTasks(pid,newUid);
     return {name:f.p.name,phone:fmtPhone(digits),temp};
   }
   async function revokeAccess(pid){
@@ -704,7 +717,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(digits){try{const lg=await fb.get("logins/"+digits);await fb.set("logins/"+digits,{gen:(lg&&lg.gen)||0,uid:null})}catch(_){}}
     delete f.p.uid;
     await saveStaff(f.dept);
-    relinkTasks(pid);
+    relinkTasks(pid,null);
   }
 
   function applyPerson(pid,match){
@@ -1044,6 +1057,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(!editId||!aid||!["status","progress","eta"].includes(k))return;
     const v=k==="progress"?Number(el.value):el.value;
     setRep(editId,aid,{[k]:v});
+    if(k==="status")notifyChange(tasks.find(x=>x.id===editId),aid,{kind:"status",status:v});
     if(k==="status"){el.className="pill st-"+v;toast("Статус: "+stName(v))}else toast("Збережено");
   });
   $("#repSection").addEventListener("click",e=>{
@@ -1128,6 +1142,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
         if(pos||name)list.push({id:r.dataset.aid,dept:r.querySelector(".a-dept").value,position:pos,name});
       });
       linkStaff(list);
+      const prevU=new Set((t?t.assignees:[]).map(a=>a.uid).filter(Boolean));
       const isNew=!t;
       const task=t||{id:fb.newId("tasks"),n:tasks.reduce((m,x)=>Math.max(m,x.n||0),0)+1,reps:{},depts:[],assignees:[],tk:null,tkRaw:null};
       Object.assign(task,{title,primary:$("#iDept").value,block:$("#iBlock").value.trim(),due:$("#iDue").value||"",prio:$("#iPrio").value,
@@ -1135,6 +1150,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       stamp(task);
       if(isNew)tasks.push(task);
       enqueue(task.id,()=>writeCore(task,true)).then(()=>toast(isNew?"Задачу поставлено":"Збережено"),writeErr);
+      notifyAssigned(task,list.map(a=>a.uid).filter(u=>u&&!prevU.has(u)));
     }
     closeDlg();render(true);
   });
@@ -1491,6 +1507,173 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
 .tpl-list{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px;font-size:13px}
 .tpl-blk{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 @media (max-width:600px){#tplDlg{width:100vw}.tpl-body{max-height:none}}`;
+    document.head.appendChild(st);
+  })();
+
+  /* ---------- Telegram notifications (free, sent from the browser of whoever made the change) ---------- */
+  let notifyCfg=null, notifyMap=null, notifyMapAt=0, linkPoll=null;
+  let wantOpen=(String(location.hash||"").match(/^#t-([\w-]+)$/)||[])[1]||null;
+  const tgEsc=v=>String(v==null?"":v).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  const siteUrl=()=>location.origin+location.pathname;
+  async function tg(method,params,get){
+    if(!notifyCfg||!notifyCfg.token)throw new Error("no-bot");
+    const base="https://api.telegram.org/bot"+notifyCfg.token+"/"+method;
+    const qs=new URLSearchParams();Object.keys(params||{}).forEach(k=>qs.append(k,typeof params[k]==="object"?JSON.stringify(params[k]):String(params[k])));
+    const r=get?await fetch(base+"?"+qs.toString()):await fetch(base,{method:"POST",body:qs});
+    const j=await r.json();
+    if(!j.ok){const e=new Error(j.description||"telegram");e.tg=j;throw e}
+    return j.result;
+  }
+  async function loadNotifyMap(){
+    if(notifyMap&&Date.now()-notifyMapAt<60000)return notifyMap;
+    const m={};
+    try{(await fb.list("notify")).forEach(d=>{if(d.data&&d.data.chatId)m[d.id]=d.data.chatId})}catch(e){}
+    notifyMap=m;notifyMapAt=Date.now();return m;
+  }
+  async function sendTo(chats,text){
+    if(!notifyCfg||!notifyCfg.token||!chats.length)return;
+    for(const c of [...new Set(chats.map(String))]){
+      try{await tg("sendMessage",{chat_id:c,text,parse_mode:"HTML",disable_web_page_preview:true})}catch(e){}
+    }
+  }
+  function actorName(){return isDir()?"Директор":((me&&me.name)||"Працівник")}
+  function recipientsFor(t,exceptUid){
+    const m=notifyMap||{}, out=[];
+    t.assignees.forEach(a=>{if(a.uid&&a.uid!==exceptUid&&m[a.uid])out.push(m[a.uid])});
+    if(!isDir()&&notifyCfg&&notifyCfg.directorChat)out.push(notifyCfg.directorChat);
+    return out;
+  }
+  function msgFooter(t){return "\n\n<a href=\""+tgEsc(siteUrl()+"#t-"+t.id)+"\">Відкрити задачу</a>"}
+  async function notifyChange(t,aid,ev){
+    try{
+      if(!t||!notifyCfg||!notifyCfg.token)return;
+      await loadNotifyMap();
+      const chats=recipientsFor(t,me?me.uid:null);if(!chats.length)return;
+      const a=t.assignees.find(x=>x.id===aid);
+      const urgent=ev.kind==="entry"?(ev.type==="issue"||ev.type==="question"):ev.status==="issue";
+      let text;
+      if(notifyCfg.details===false){
+        text=(urgent?"❗ ":"🔔 ")+"Оновлення у вашій задачі. Відкрийте сайт, щоб переглянути."+msgFooter(t);
+      }else{
+        const whoTxt="<b>"+tgEsc(actorName())+"</b>"+(a&&a.position&&!isDir()?" ("+tgEsc(a.position)+")":"");
+        const body=ev.kind==="entry"
+          ?whoTxt+" · "+tgEsc(typeName(ev.type))+"\n"+tgEsc(String(ev.text).slice(0,400))+(String(ev.text).length>400?"…":"")
+          :whoTxt+" змінює статус: <b>"+tgEsc(stName(ev.status))+"</b>";
+        text=(urgent?"❗ ":"🔔 ")+body+"\n\n📋 "+tgEsc(t.title)+msgFooter(t);
+      }
+      await sendTo(chats,text);
+    }catch(e){}
+  }
+  async function notifyAssigned(t,uids){
+    try{
+      if(!uids.length||!notifyCfg||!notifyCfg.token)return;
+      const m=await loadNotifyMap();
+      const chats=uids.map(u=>m[u]).filter(Boolean);if(!chats.length)return;
+      const text=notifyCfg.details===false
+        ?"📌 Вам призначено нову задачу. Відкрийте сайт, щоб переглянути."+msgFooter(t)
+        :"📌 <b>Нова задача для вас</b>\n"+tgEsc(t.title)+(t.due?"\nТермін: "+fmtDate(t.due):"")+"\nПріоритет: "+tgEsc(PRIOS[t.prio]||"")+(t.comment?"\nПримітка: "+tgEsc(t.comment):"")+msgFooter(t);
+      await sendTo(chats,text);
+    }catch(e){}
+  }
+  function myChat(){return isDir()?(notifyCfg&&notifyCfg.directorChat)||null:(notifyMap&&me&&notifyMap[me.uid])||null}
+
+  document.body.insertAdjacentHTML("beforeend",`<dialog id="notifyDlg" aria-labelledby="notifyTitle"><div class="dlg">
+    <h2 id="notifyTitle">Сповіщення в Telegram</h2>
+    <div id="notifyBody" class="notify-body"></div>
+    <div class="dlg-f"><div class="r"><button class="btn" type="button" id="notifyClose">Готово</button></div></div></div></dialog>`);
+  $("#settingsBtn").insertAdjacentHTML("beforebegin",`<button class="btn" id="notifyBtn" type="button" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>Сповіщення</button>`);
+  const notifyDlg=$("#notifyDlg");
+  function stopLink(){if(linkPoll){clearInterval(linkPoll.timer);linkPoll=null}}
+  async function renderNotify(){
+    if(!isDir())await loadNotifyMap();
+    const cfg=notifyCfg||{}, linked=myChat();
+    let h="";
+    if(isDir()){
+      h+=`<section class="nsec"><h3>Бот підприємства</h3>
+        ${cfg.token?`<p class="note">Підключено бота <b>@${esc(cfg.botName||"")}</b>.</p>`:`<ol class="nsteps">
+          <li>У Telegram відкрийте <b>@BotFather</b> і надішліть <code>/newbot</code>.</li>
+          <li>Назва: напр. <i>НТЦ МЕТА Задачі</i>. Ім'я користувача має закінчуватися на <code>bot</code>, напр. <i>ntc_meta_zadachi_bot</i>.</li>
+          <li>BotFather надішле <b>токен</b> вигляду <code>123456789:AA…</code>. Скопіюйте його сюди.</li></ol>`}
+        <div class="pwrow"><input class="field mono" id="nfToken" type="password" placeholder="${cfg.token?"Новий токен (щоб замінити бота)":"Токен від BotFather"}" autocomplete="off"><button class="btn" type="button" id="nfSave">${cfg.token?"Замінити":"Перевірити й зберегти"}</button></div>
+        <label class="remember" for="nfDetails"><input type="checkbox" id="nfDetails" ${cfg.details===false?"":"checked"} ${cfg.token?"":"disabled"}> Показувати в сповіщеннях назву задачі й текст запису</label>
+        <p class="note">Якщо вимкнути, приходитиме лише «Оновлення у вашій задачі» з посиланням: зміст задач не потраплятиме в Telegram.</p>
+        <div class="err" id="nfErr"></div></section>`;
+    }
+    h+=`<section class="nsec"><h3>${isDir()?"Ваш Telegram (директор)":"Ваш Telegram"}</h3>`;
+    if(!cfg.token){h+=`<p class="note">${isDir()?"Спершу підключіть бота вище.":"Директор ще не налаштував сповіщення."}</p>`}
+    else if(linkPoll){h+=`<p>1. Натисніть посилання — відкриється Telegram:</p><p><a class="btn primary" href="https://t.me/${esc(cfg.botName)}?start=${esc(linkPoll.code)}" target="_blank" rel="noopener">Відкрити @${esc(cfg.botName)}</a></p>
+        <p>2. У Telegram натисніть <b>«Старт» / «Start»</b>.</p><p class="note">Чекаю підтвердження… <span class="mono" id="nfLeft"></span></p>
+        <div><button class="btn ghost" type="button" id="nfCancel">Скасувати</button></div>`}
+    else if(linked){h+=`<p><span class="acc on">Підключено</span></p>
+        <p class="note">${isDir()?"Ви отримуватимете сповіщення про записи, зміни статусу, проблеми й питання в усіх задачах.":"Ви отримуватимете сповіщення про нові задачі для вас і про дії колег у ваших спільних задачах."}</p>
+        <div class="pwrow"><button class="btn" type="button" id="nfTest">Надіслати тест</button><button class="btn ghost danger-t" type="button" id="nfOff">Вимкнути</button></div>`}
+    else{h+=`<p class="note">Сповіщення приходитимуть у Telegram на ваш телефон, навіть коли сайт закритий.</p><div><button class="btn primary" type="button" id="nfLink">Підключити Telegram</button></div>`}
+    h+=`<div class="err" id="nfErr2"></div></section>`;
+    $("#notifyBody").innerHTML=h;
+  }
+  $("#notifyBtn").addEventListener("click",()=>{renderNotify();try{notifyDlg.showModal()}catch(e){notifyDlg.setAttribute("open","")}});
+  $("#notifyClose").addEventListener("click",()=>{stopLink();try{notifyDlg.close()}catch(e){notifyDlg.removeAttribute("open")}});
+  notifyDlg.addEventListener("close",stopLink);
+  async function saveMyChat(chatId){
+    if(isDir())await fb.merge("settings/notify",{directorChat:chatId});
+    else{await fb.set("notify/"+me.uid,{chatId,at:new Date().toISOString()});notifyMap=Object.assign({},notifyMap||{},{[me.uid]:chatId})}
+  }
+  $("#notifyBody").addEventListener("change",async e=>{
+    if(e.target.id==="nfDetails"&&isDir()){try{await fb.merge("settings/notify",{details:e.target.checked});toast("Збережено")}catch(ex){writeErr(ex)}}
+  });
+  $("#notifyBody").addEventListener("click",async e=>{
+    const id=e.target.id;
+    if(id==="nfSave"&&isDir()){
+      const tok=$("#nfToken").value.trim(), err=$("#nfErr");err.textContent="";
+      if(!/^\d+:[\w-]{30,}$/.test(tok)){err.textContent="Це не схоже на токен. Він виглядає так: 123456789:AAH…";return}
+      e.target.disabled=true;e.target.textContent="Перевірка…";
+      try{
+        const r=await fetch("https://api.telegram.org/bot"+tok+"/getMe").then(x=>x.json());
+        if(!r.ok)throw new Error("Telegram не прийняв токен. Скопіюйте його з BotFather ще раз.");
+        const same=notifyCfg&&notifyCfg.token===tok;
+        await fb.set("settings/notify",Object.assign({details:true},same?notifyCfg:{},{token:tok,botName:r.result.username},same?{}:{directorChat:null}));
+        if(!same){try{for(const d of await fb.list("notify"))await fb.del("notify/"+d.id)}catch(_){}notifyMap={}}
+        toast("Бота @"+r.result.username+" підключено");
+      }catch(ex){err.textContent=ex.message&&!/Failed to fetch/i.test(ex.message)?ex.message:"Немає зв'язку з Telegram. Перевірте інтернет."}
+      e.target.disabled=false;renderNotify();
+    }
+    else if(id==="nfLink"){
+      const code=Array.from(crypto.getRandomValues(new Uint8Array(6)),b=>(b%36).toString(36)).join("");
+      linkPoll={code,until:Date.now()+180000,timer:null};
+      renderNotify();
+      linkPoll.timer=setInterval(async()=>{
+        if(!linkPoll)return;
+        const left=Math.max(0,Math.round((linkPoll.until-Date.now())/1000)),el=$("#nfLeft");if(el)el.textContent=left+" с";
+        if(left<=0){stopLink();renderNotify();setTimeout(()=>{const x=$("#nfErr2");if(x)x.textContent="Час вийшов. Натисніть «Підключити Telegram» ще раз і потім «Старт» у боті."},30);return}
+        if(linkPoll.busy)return;linkPoll.busy=true;
+        try{
+          const ups=await tg("getUpdates",{offset:-100,allowed_updates:["message"]},true);
+          const hit=(ups||[]).find(u=>u.message&&u.message.text&&u.message.text.trim()==="/start "+linkPoll.code);
+          if(hit){
+            const chatId=hit.message.chat.id;stopLink();
+            await saveMyChat(chatId);
+            try{await tg("sendMessage",{chat_id:chatId,text:"✅ Сповіщення підключено.\n"+(isDir()?"Ви отримуватимете повідомлення про дії працівників у задачах.":"Ви отримуватимете повідомлення про свої задачі."),parse_mode:"HTML"})}catch(_){}
+            toast("Telegram підключено");renderNotify();return;
+          }
+        }catch(ex){}
+        if(linkPoll)linkPoll.busy=false;
+      },2500);
+    }
+    else if(id==="nfCancel"){stopLink();renderNotify()}
+    else if(id==="nfTest"){const c=myChat();if(c){try{await tg("sendMessage",{chat_id:c,text:"🔔 Тестове сповіщення з «Задачі НТЦ МЕТА». Усе працює."});toast("Надіслано")}catch(ex){$("#nfErr2").textContent="Не вдалося надіслати. Можливо, бота заблоковано в Telegram — підключіть знову."}}}
+    else if(id==="nfOff"){try{if(isDir())await fb.merge("settings/notify",{directorChat:null});else{await fb.del("notify/"+me.uid);if(notifyMap)delete notifyMap[me.uid]}toast("Сповіщення вимкнено")}catch(ex){writeErr(ex)}renderNotify()}
+  });
+  (function(){
+    const st=document.createElement("style");
+    st.textContent=`#notifyDlg{width:min(620px,calc(100vw - 32px))}
+.notify-body{display:flex;flex-direction:column;gap:16px}
+.nsec{border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.nsec h3{margin:0;font-family:var(--font-display);font-size:14px;font-weight:500}
+.nsec p{margin:0}
+.nsteps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+.nsec code{font-family:var(--font-mono);font-size:12.5px;background:var(--surface-2);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.nsec a.btn{text-decoration:none;display:inline-flex}
+@media (max-width:600px){#notifyDlg{width:100vw}}`;
     document.head.appendChild(st);
   })();
 

@@ -440,7 +440,7 @@ select.pill.sm:disabled{padding-right:8px}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence, onAuthStateChanged, updatePassword, reauthenticateWithCredential, EmailAuthProvider, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, collection, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, collection, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const cfg = window.FIREBASE_CONFIG;
 if (!cfg || !cfg.apiKey || /ВСТАВ|PASTE/i.test(cfg.apiKey)) {
@@ -477,6 +477,7 @@ if (!cfg || !cfg.apiKey || /ВСТАВ|PASTE/i.test(cfg.apiKey)) {
     set: (p, d) => setDoc(ref(p), d),
     merge: (p, d) => setDoc(ref(p), d, { merge: true }),
     del: p => deleteDoc(ref(p)),
+    async list(c) { const q = await getDocs(collection(fs, c)); return q.docs.map(d => ({ id: d.id, data: d.data() })); },
     newId: c => doc(collection(fs, c)).id,
     watchDoc(p, next, err) { return onSnapshot(ref(p), s => next(s.exists() ? s.data() : null), err); },
     watchTasks(filter, next, err) {

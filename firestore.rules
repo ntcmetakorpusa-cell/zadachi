@@ -20,6 +20,17 @@ service cloud.firestore {
       allow read, write: if isDirector();
     }
 
+    // Telegram-бот для сповіщень: налаштовує директор, читають усі з доступом.
+    match /settings/notify {
+      allow read: if isDirector() || isPerson();
+      allow write: if isDirector();
+    }
+    // Telegram-чат кожного працівника для сповіщень: підключає сам працівник.
+    match /notify/{uid} {
+      allow read: if isDirector() || isPerson();
+      allow write: if isDirector() || (signedIn() && request.auth.uid == uid);
+    }
+
     // Логін за номером: лише номер покоління облікового запису, без паролів і даних.
     match /logins/{phone} {
       allow get: if true;
