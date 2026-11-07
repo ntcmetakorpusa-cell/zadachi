@@ -439,7 +439,7 @@ select.pill.sm:disabled{padding-right:8px}
 <script src="app-core.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence, onAuthStateChanged, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence, onAuthStateChanged, updatePassword, reauthenticateWithCredential, EmailAuthProvider, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, collection, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const cfg = window.FIREBASE_CONFIG;
@@ -457,10 +457,12 @@ if (!cfg || !cfg.apiKey || /ВСТАВ|PASTE/i.test(cfg.apiKey)) {
     emails: window.ROLE_EMAILS,
     async signIn(email, pw, remember) {
       await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
-      await signInWithEmailAndPassword(auth, email, pw);
+      const c = await signInWithEmailAndPassword(auth, email, pw);
+      return c.user.uid;
     },
     signOut: () => signOut(auth),
-    onAuth(cb) { onAuthStateChanged(auth, u => cb(u ? u.email : null)); },
+    onAuth(cb) { onAuthStateChanged(auth, u => cb(u ? { email: u.email, uid: u.uid } : null)); },
+    async createUser(email, pw) { const a = secAuth(); const c = await createUserWithEmailAndPassword(a, email, pw); const id = c.user.uid; await signOut(a); return id; },
     async verifyPassword(email, pw) { const a = secAuth(); await signInWithEmailAndPassword(a, email, pw); await signOut(a); },
     async changePassword(email, cur, nw) {
       if (auth.currentUser && auth.currentUser.email === email) {
@@ -477,8 +479,9 @@ if (!cfg || !cfg.apiKey || /ВСТАВ|PASTE/i.test(cfg.apiKey)) {
     del: p => deleteDoc(ref(p)),
     newId: c => doc(collection(fs, c)).id,
     watchDoc(p, next, err) { return onSnapshot(ref(p), s => next(s.exists() ? s.data() : null), err); },
-    watchTasks(dept, next, err) {
-      const q = dept ? query(collection(fs, "tasks"), where("depts", "array-contains", dept)) : collection(fs, "tasks");
+    watchTasks(filter, next, err) {
+      if (typeof filter === "string") filter = { field: "depts", value: filter };
+      const q = filter ? query(collection(fs, "tasks"), where(filter.field, "array-contains", filter.value)) : collection(fs, "tasks");
       return onSnapshot(q, s => next(s.docs.map(d => ({ id: d.id, data: d.data() }))), err);
     }
   });

@@ -178,7 +178,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   }
 
   /* ---------- state ---------- */
-  let vault=null, role=null, keys={}, rawKeys={}, sessionRev=0;
+  let vault=null, role=null, keys={}, rawKeys={}, sessionRev=0, me=null, unsubMe=null;
   let tasks=[], plans={}, staff={}, loaded=false;
   let unsubs=[], snapSeq=0, unsubVault=null;
   let loggingIn=false, pendingPw=null, pendingRemember=false;
@@ -187,11 +187,20 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   const saveUi=()=>{try{localStorage.setItem("zv-ui",JSON.stringify({view:ui.view}))}catch(e){}};
   const isDir=()=>role==="director";
   const canEditAll=()=>isDir();
-  const canRep=(t,a)=>!!a&&(isDir()||a.dept===role);
+  const isHead=()=>!!(me&&me.head);
+  const canRep=(t,a)=>!!a&&(isDir()||(isHead()&&a.dept===me.dept)||(!!me&&!!a.uid&&a.uid===me.uid));
+  const LOGIN_DOMAIN=String(EMAIL.director||"director@zadachi.example").split("@")[1]||"zadachi.example";
+  function normPhone(v){let d=String(v||"").replace(/\D/g,"");if(d.length===10&&d[0]==="0")d="38"+d;return d.length>=11&&d.length<=15?d:null}
+  const fmtPhone=d=>!d?"":(/^380\d{9}$/.test(d)?"+"+d.slice(0,3)+" "+d.slice(3,5)+" "+d.slice(5,8)+" "+d.slice(8,10)+" "+d.slice(10):"+"+d);
+  const loginEmail=(d,g)=>"p"+d+"."+g+"@"+LOGIN_DOMAIN;
+  const MIN_PW_STAFF=8;
+  const pwOk=(p,min)=>p.length>=min&&/[A-Za-zА-Яа-яІіЇїЄєҐґ]/.test(p)&&/\d/.test(p);
+  function genTemp(){const L="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz",D="23456789";const a=crypto.getRandomValues(new Uint32Array(8));let s="";for(let i=0;i<4;i++)s+=L[a[i]%L.length];s+="-";for(let i=4;i<8;i++)s+=D[a[i]%D.length];return s}
+  function personFrom(u,p,digits,gen){const d=digits||p.phone, g=gen||p.gen;return {uid:u,pid:p.pid,dept:p.dept,head:!!p.head,name:p.name||"",position:p.position||"",phone:d,gen:g,pwAt:p.pwAt||"",email:loginEmail(d,g)}}
 
   let tt;
   function toast(msg){const t=$("#toast");t.textContent=msg;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,2800)}
-  function show(id){["#loginScreen","#setupScreen","#app"].forEach(s=>$(s).hidden=(s!==id))}
+  function show(id){["#loginScreen","#setupScreen","#firstPwScreen","#app"].forEach(s=>{const el=$(s);if(el)el.hidden=(s!==id)})}
 
   /* ---------- session: keys stay on this device ---------- */
   function readSession(){
@@ -199,18 +208,21 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     return null;
   }
   function writeSession(remember){
-    sessionRev=(vault.rev||{})[role]||0;
-    const s={role,rev:sessionRev,keys:{}};
+    const s={role,keys:{}};
+    if(isDir()){sessionRev=(vault.rev||{}).director||0;s.rev=sessionRev}
+    else if(me){s.uid=me.uid;s.pwAt=me.pwAt||""}
     Object.keys(rawKeys).forEach(d=>s.keys[d]=b64(rawKeys[d]));
     const str=JSON.stringify(s);
     try{sessionStorage.setItem("zv-session",str)}catch(e){}
     try{if(remember)localStorage.setItem("zv-session",str);else localStorage.removeItem("zv-session")}catch(e){}
   }
+  function updateSession(mut){try{const s=readSession();if(s){mut(s);const str=JSON.stringify(s);sessionStorage.setItem("zv-session",str);if(localStorage.getItem("zv-session"))localStorage.setItem("zv-session",str)}}catch(_){}}
   function clearSession(){try{sessionStorage.removeItem("zv-session")}catch(e){}try{localStorage.removeItem("zv-session")}catch(e){}}
   async function restoreSession(s){
     try{
       const rk={},k={};
-      for(const d of ROLE_DEPTS[s.role]){if(!s.keys||!s.keys[d])return false;rk[d]=unb64(s.keys[d]);k[d]=await importDK(rk[d])}
+      const ds=Object.keys(s.keys||{});if(!ds.length)return false;
+      for(const d of ds){rk[d]=unb64(s.keys[d]);k[d]=await importDK(rk[d])}
       rawKeys=rk;keys=k;return true;
     }catch(e){return false}
   }
@@ -219,7 +231,9 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(/invalid-credential|wrong-password|user-not-found|invalid-login/.test(c))return"Невірний пароль.";
     if(/too-many-requests/.test(c))return"Забагато спроб. Зачекайте кілька хвилин і спробуйте знову.";
     if(/network/.test(c))return"Немає з'єднання з інтернетом.";
-    if(/user-disabled/.test(c))return"Цей розділ вимкнено в налаштуваннях Firebase.";
+    if(/user-disabled/.test(c))return"Обліковий запис вимкнено. Зверніться до директора.";
+    if(/email-already-in-use/.test(c))return"Такий обліковий запис уже існує.";
+    if(/admin-restricted-operation|operation-not-allowed/.test(c))return"Створення облікових записів вимкнено в Firebase (Authentication → Settings → User actions → Enable create).";
     if(/weak-password/.test(c))return"Пароль занадто простий.";
     if(/requires-recent-login/.test(c))return"Увійдіть знову й повторіть.";
     return"Помилка входу"+(c?" ("+c+")":"")+".";
@@ -227,37 +241,66 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
 
   /* ---------- login ---------- */
   let pickRole=null;
-  $("#roleTiles").innerHTML=Object.keys(ROLES).map(k=>`<button type="button" class="role" data-role="${k}" aria-pressed="false"><span class="ic">${ROLES[k].icon}</span><b>${ROLES[k].name}</b><span>${ROLES[k].desc}</span></button>`).join("");
+  const PERSON_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg>';
+  const KINDS={person:{name:"Працівник",desc:"Вхід за номером телефону та особистим паролем",icon:PERSON_ICON},director:{name:"Директор",desc:"Усі задачі, плани, працівники й доступи",icon:ROLES.director.icon}};
+  $("#roleTiles").classList.add("two");
+  $("#roleTiles").innerHTML=Object.keys(KINDS).map(k=>`<button type="button" class="role" data-role="${k}" aria-pressed="false"><span class="ic">${KINDS[k].icon}</span><b>${KINDS[k].name}</b><span>${KINDS[k].desc}</span></button>`).join("");
+  $("#pwLabel").insertAdjacentHTML("beforebegin",`<div class="fl" id="phoneWrap" hidden><label for="phone" style="font-weight:700">Номер телефону</label><input class="field mono" id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+380 50 123 45 67"></div>`);
+  { const lp=$("#loginScreen > p"); if(lp)lp.textContent="Працівники входять за своїм номером телефону й особистим паролем. Тимчасовий пароль видає директор, при першому вході ви задасте власний. Усі задачі зашифровані."; }
+  function pickKind(k){
+    pickRole=k;
+    document.querySelectorAll("#roleTiles .role").forEach(x=>x.setAttribute("aria-pressed",String(x.dataset.role===k)));
+    $("#phoneWrap").hidden=k!=="person";
+    $("#pwLabel").textContent=k==="person"?"Особистий пароль":"Пароль директора";
+    $("#pw").disabled=false;$("#pw").placeholder="Введіть пароль";$("#loginErr").textContent="";
+    $("#loginBtn").disabled=false;
+  }
   $("#roleTiles").addEventListener("click",e=>{
     const b=e.target.closest("[data-role]");if(!b)return;
-    pickRole=b.dataset.role;
-    document.querySelectorAll(".role").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
-    $("#pwLabel").textContent="Пароль розділу «"+ROLES[pickRole].name+"»";
-    $("#pw").disabled=false;$("#pw").placeholder="Введіть пароль";$("#pw").value="";$("#loginErr").textContent="";
-    $("#loginBtn").disabled=false;$("#pw").focus();
+    pickKind(b.dataset.role);
+    (b.dataset.role==="person"&&!$("#phone").value?$("#phone"):$("#pw")).focus();
   });
+  pickKind("person");
+  try{const ph=localStorage.getItem("zv-phone");if(ph)$("#phone").value=fmtPhone(ph)}catch(e){}
   $("#loginForm").addEventListener("submit",async e=>{
     e.preventDefault();
     if(!pickRole||loggingIn)return;
     const pw=$("#pw").value;
+    let digits=null;
+    if(pickRole==="person"){digits=normPhone($("#phone").value);if(!digits){$("#loginErr").textContent="Введіть номер телефону, напр. +380 50 123 45 67.";$("#phone").focus();return}}
     if(!pw){$("#loginErr").textContent="Введіть пароль.";return}
     loggingIn=true;$("#loginBtn").disabled=true;$("#loginBtn").textContent="Перевірка…";$("#loginErr").textContent="";
     const remember=$("#remember").checked;
     try{
-      await fb.signIn(EMAIL[pickRole],pw,remember);
-      const v=await fb.get("settings/vault");
-      if(!v){
-        if(pickRole==="director"){pendingPw=pw;pendingRemember=remember;show("#setupScreen");$("#sV").focus()}
-        else{await fb.signOut();$("#loginErr").textContent="Директор ще не завершив перше налаштування."}
+      if(pickRole==="director"){
+        await fb.signIn(EMAIL.director,pw,remember);
+        const v=await fb.get("settings/vault");
+        if(!v){pendingPw=pw;pendingRemember=remember;show("#setupScreen");return}
+        vault=v;
+        const kek=await deriveKek(pw,vault.salts.director,vault.iter);
+        const wr=vault.wrapped.director||{};
+        const rk={},k={};
+        try{for(const d of ROLE_DEPTS.director){rk[d]=await open(kek,wr[d]);k[d]=await importDK(rk[d])}}
+        catch(err){await fb.signOut();$("#loginErr").textContent="Пароль прийнято сервером, але ключ шифрування не підходить.";return}
+        rawKeys=rk;keys=k;me=null;role="director";
+        writeSession(remember);
+        enter();
         return;
       }
-      vault=v;
-      const kek=await deriveKek(pw,vault.salts[pickRole],vault.iter);
-      const wr=vault.wrapped[pickRole]||{};
+      let lg=null;try{lg=await fb.get("logins/"+digits)}catch(ex){}
+      if(!lg||!lg.uid||!lg.gen){$("#loginErr").textContent="Для цього номера доступ не надано. Зверніться до директора.";return}
+      const u=await fb.signIn(loginEmail(digits,lg.gen),pw,remember);
+      const p=await fb.get("people/"+u);
+      if(!p){await fb.signOut();$("#loginErr").textContent="Доступ закрито. Зверніться до директора.";return}
+      const kek=await deriveKek(pw,p.salt,p.iter||ITER);
       const rk={},k={};
-      try{for(const d of ROLE_DEPTS[pickRole]){rk[d]=await open(kek,wr[d]);k[d]=await importDK(rk[d])}}
-      catch(err){await fb.signOut();$("#loginErr").textContent="Пароль прийнято сервером, але ключ шифрування не підходить. Зверніться до директора.";return}
-      rawKeys=rk;keys=k;role=pickRole;
+      try{for(const d of Object.keys(p.wrap||{})){rk[d]=await open(kek,p.wrap[d]);k[d]=await importDK(rk[d])}}
+      catch(err){await fb.signOut();$("#loginErr").textContent="Пароль прийнято, але ключ шифрування не підходить. Попросіть директора скинути пароль.";return}
+      rawKeys=rk;keys=k;
+      me=personFrom(u,p,digits,lg.gen);
+      try{if(remember)localStorage.setItem("zv-phone",digits);else localStorage.removeItem("zv-phone")}catch(_){}
+      if(p.mustChange){pendingPw=pw;pendingRemember=remember;show("#firstPwScreen");$("#fp1").focus();return}
+      role=me.dept;
       writeSession(remember);
       enter();
     }catch(err){
@@ -267,19 +310,63 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     }
   });
 
+  /* ---------- first login: person sets own password ---------- */
+  $("#setupScreen").insertAdjacentHTML("afterend",`<section class="login setup" id="firstPwScreen" hidden>
+    ${logoSVG("setup-logo",false)}
+    <h1 class="login-title">Задайте власний пароль</h1>
+    <p>Ви увійшли з тимчасовим паролем від директора. Придумайте свій: щонайменше 8 символів, літери й цифри. Його знатимете лише ви.</p>
+    <form class="pwbox" id="firstPwForm" autocomplete="off">
+      <div class="fl"><label for="fp1">Новий пароль</label><input class="field" id="fp1" type="password" autocomplete="new-password"></div>
+      <div class="fl"><label for="fp2">Повторіть пароль</label><input class="field" id="fp2" type="password" autocomplete="new-password"></div>
+      <div class="pwrow"><button class="btn primary" type="submit" id="fpBtn">Зберегти й увійти</button><button class="btn ghost" type="button" id="fpCancel">Скасувати</button></div>
+      <div class="err" id="fpErr" role="alert"></div>
+    </form></section>`);
+  async function setOwnPassword(cur,p1){
+    const old=await fb.get("people/"+me.uid);
+    const prevAt=me.pwAt;
+    const salt=b64(crypto.getRandomValues(new Uint8Array(16)));
+    const kek=await deriveKek(p1,salt,ITER);
+    const wrap={};for(const d of Object.keys(rawKeys))wrap[d]=await seal(kek,rawKeys[d]);
+    const pwAt=new Date().toISOString();
+    me.pwAt=pwAt;
+    let written=false;
+    try{
+      await fb.merge("people/"+me.uid,{wrap,salt,mustChange:false,pwAt});written=true;
+      await fb.changePassword(me.email,cur,p1);
+    }catch(ex){
+      me.pwAt=prevAt;
+      if(written&&old){try{await fb.merge("people/"+me.uid,{wrap:old.wrap,salt:old.salt,mustChange:!!old.mustChange,pwAt:old.pwAt||""})}catch(_){}}
+      throw ex;
+    }
+    updateSession(s=>{s.pwAt=pwAt});
+  }
+  $("#firstPwForm").addEventListener("submit",async e=>{
+    e.preventDefault();
+    const p1=$("#fp1").value,p2=$("#fp2").value,err=$("#fpErr"),btn=$("#fpBtn");
+    err.textContent="";
+    if(!me||!pendingPw){err.textContent="Увійдіть ще раз.";return}
+    if(!pwOk(p1,MIN_PW_STAFF)){err.textContent="Щонайменше "+MIN_PW_STAFF+" символів, літери й цифри.";return}
+    if(p1===pendingPw){err.textContent="Новий пароль має відрізнятися від тимчасового.";return}
+    if(p1!==p2){err.textContent="Паролі не збігаються.";return}
+    btn.disabled=true;btn.textContent="Збереження…";
+    try{
+      await setOwnPassword(pendingPw,p1);
+      pendingPw=null;$("#fp1").value=$("#fp2").value="";
+      role=me.dept;writeSession(pendingRemember);enter();toast("Пароль збережено");
+    }catch(ex){err.textContent=ex.code?authMsg(ex):(ex.message||"Не вдалося зберегти пароль.")}
+    btn.disabled=false;btn.textContent="Зберегти й увійти";
+  });
+  $("#fpCancel").addEventListener("click",()=>{pendingPw=null;logout("")});
+
   /* ---------- first-time setup (director, once) ---------- */
   $("#setupForm").addEventListener("submit",async e=>{
     e.preventDefault();
-    const pv=$("#sV").value, pa=$("#sA").value, err=$("#setupErr"), btn=$("#setupBtn");
+    const err=$("#setupErr"), btn=$("#setupBtn");
     err.textContent="";
     if(!pendingPw){err.textContent="Увійдіть як директор ще раз.";return}
-    if(!pv||!pa){err.textContent="Введіть обидва паролі.";return}
     btn.disabled=true;btn.textContent="Налаштування…";
     try{
-      for(const [r,p] of [["vyrobnytstvo",pv],["administratsiia",pa]]){
-        try{await fb.verifyPassword(EMAIL[r],p)}catch(ex){throw new Error("Пароль розділу «"+ROLES[r].name+"» не підходить: "+authMsg(ex))}
-      }
-      const pws={director:pendingPw,vyrobnytstvo:pv,administratsiia:pa};
+      const pws={director:pendingPw};
       const rk={};DEPTS.forEach(d=>rk[d.id]=crypto.getRandomValues(new Uint8Array(32)));
       const salts={},wrapped={};
       for(const r of Object.keys(pws)){
@@ -291,7 +378,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       const v={v:1,iter:ITER,salts,wrapped,rev:{director:0,vyrobnytstvo:0,administratsiia:0},isDefault:{director:false,vyrobnytstvo:false,administratsiia:false},changedAt:{},createdAt:new Date().toISOString()};
       await fb.set("settings/vault",v);
       vault=v;rawKeys=rk;keys={};for(const d of Object.keys(rk))keys[d]=await importDK(rk[d]);
-      role="director";writeSession(pendingRemember);
+      role="director";me=null;writeSession(pendingRemember);
       if($("#sSeed").checked&&Array.isArray(window.SEED_TASKS)){
         btn.textContent="Додаю задачі…";
         let n=0;
@@ -309,29 +396,41 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     btn.disabled=false;btn.textContent="Завершити налаштування";
   });
   $("#setupCancel").addEventListener("click",async()=>{pendingPw=null;await fb.signOut();show("#loginScreen")});
+  ["#sV","#sA"].forEach(id=>{const f=$(id)&&$(id).closest(".fl");if(f)f.hidden=true});
+  { const sp=$("#setupScreen > p");if(sp)sp.textContent="Створюємо ключі шифрування з вашого пароля директора. Це робиться один раз. Працівникам доступ ви надасте пізніше в розділі «Працівники»."; }
 
   function enter(){
     ui.dept=isDir()?"all":role; ui.q=ui.block=ui.owner=ui.prio=ui.status=""; $("#q").value="";
     show("#app");
-    $("#whoBadge").textContent=ROLES[role].name;
-    $("#appTitle").textContent=ROLES[role].title;
+    $("#whoBadge").textContent=isDir()?"Директор":((me.name||deptName(me.dept))+(isHead()?" · керівник":""));
+    $("#appTitle").textContent=isDir()?ROLES.director.title:(isHead()?"Задачі підрозділу «"+deptName(me.dept)+"»":"Мої задачі");
+    $("#settingsBtn").hidden=false;
+    { const tn=[...$("#settingsBtn").childNodes].reverse().find(n=>n.nodeType===3&&n.textContent.trim());if(tn)tn.textContent=isDir()?" Паролі ":" Мій пароль "; }
     $("#depts").hidden=!isDir();
-    $("#settingsBtn").hidden=!isDir();
     $("#staffBtn").hidden=!isDir();
     $("#tplBtn").hidden=!isDir();
     $("#footNote").textContent=isDir()
       ?"Ви ставите задачі, призначаєте відповідальних з будь-якого підрозділу, задаєте терміни, плани та паролі. Кожен відповідальний пише свій звіт. Дані зашифровані."
-      :"Ви бачите задачі, де є відповідальні з вашого підрозділу. Оновлюйте свій статус і пишіть звіт; звіти інших учасників задачі видно тут же.";
-    if(!unsubVault)unsubVault=fb.watchDoc("settings/vault",v=>{if(!v||!role)return;vault=v;onVault()},()=>{});
+      :(isHead()?"Ви бачите всі задачі свого підрозділу й можете оновлювати статуси та записи його працівників. Нові задачі й терміни задає директор."
+        :"Ви бачите лише задачі, де ви відповідальний. Оновлюйте свій статус і додавайте записи; записи інших учасників задачі видно тут же.");
+    if(isDir()){if(!unsubVault)unsubVault=fb.watchDoc("settings/vault",v=>{if(!v||!role)return;vault=v;onVault()},()=>{})}
+    else if(!unsubMe)unsubMe=fb.watchDoc("people/"+me.uid,p=>{
+      if(!role||isDir()||!me)return;
+      if(!p){logout("Доступ закрито директором.");return}
+      if((p.pwAt||"")!==(me.pwAt||"")){logout("Пароль змінено. Увійдіть з новим паролем.");return}
+      if(!!p.head!==me.head||p.dept!==me.dept){logout("Ваші права змінено. Увійдіть знову.");return}
+      if(p.name&&p.name!==me.name){me.name=p.name;$("#whoBadge").textContent=me.name+(isHead()?" · керівник":"")}
+    },()=>{});
     subscribeData();
     render(true);
   }
   async function logout(msg){
-    role=null;keys={};rawKeys={};vault=null;
+    role=null;keys={};rawKeys={};vault=null;me=null;
+    if(unsubMe){try{unsubMe()}catch(e){}unsubMe=null}
     clearSession();
     unsubs.forEach(u=>{try{u()}catch(e){}});unsubs=[];
     if(unsubVault){try{unsubVault()}catch(e){}unsubVault=null}
-    tasks=[];plans={};staff={};loaded=false;renameDone=false;boxCache.clear();tkCache.clear();
+    tasks=[];plans={};staff={};loaded=false;renameDone=false;migrUids.clear();boxCache.clear();tkCache.clear();
     closeAll();
     try{await fb.signOut()}catch(e){}
     show("#loginScreen");
@@ -339,24 +438,27 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     $("#loginErr").textContent=msg||"";
   }
   $("#logoutBtn").addEventListener("click",()=>logout(""));
-  function closeAll(){[$("#dlg"),$("#pwDlg"),$("#staffDlg"),$("#tplDlg")].forEach(d=>{try{d.close()}catch(e){d.removeAttribute("open")}})}
+  function closeAll(){[$("#dlg"),$("#pwDlg"),$("#staffDlg"),$("#tplDlg")].filter(Boolean).forEach(d=>{try{d.close()}catch(e){d.removeAttribute("open")}})}
   function onVault(){
-    if(((vault.rev||{})[role]||0)!==sessionRev){logout("Пароль розділу змінено. Увійдіть з новим паролем.");return}
+    if(((vault.rev||{}).director||0)!==sessionRev){logout("Пароль директора змінено. Увійдіть з новим паролем.");return}
     renderBanner();
     if($("#pwDlg").open)renderPwSet();
   }
 
   /* restore a remembered session after reload */
-  fb.onAuth(async email=>{
-    if(loggingIn||role||!email)return;
-    const r=roleByEmail(email), s=readSession();
-    if(r&&s&&s.role===r){
-      try{
+  fb.onAuth(async user=>{
+    if(loggingIn||role||!user)return;
+    const s=readSession();
+    try{
+      if(s&&s.role==="director"&&user.email===EMAIL.director){
         const v=await fb.get("settings/vault");
-        if(v&&((v.rev||{})[r]||0)===s.rev&&await restoreSession(s)){vault=v;role=r;sessionRev=s.rev;enter();return}
-      }catch(e){}
-    }
-    if(!loggingIn&&!role&&$("#setupScreen").hidden){clearSession();try{await fb.signOut()}catch(e){}}
+        if(v&&((v.rev||{}).director||0)===s.rev&&await restoreSession(s)){vault=v;me=null;role="director";sessionRev=s.rev;enter();return}
+      }else if(s&&s.uid&&s.uid===user.uid){
+        const p=await fb.get("people/"+user.uid);
+        if(p&&!p.mustChange&&(p.pwAt||"")===(s.pwAt||"")&&await restoreSession(s)){me=personFrom(user.uid,p);role=me.dept;enter();return}
+      }
+    }catch(e){}
+    if(!loggingIn&&!role&&$("#setupScreen").hidden&&$("#firstPwScreen").hidden){clearSession();try{await fb.signOut()}catch(e){}}
   });
 
   /* ---------- task model (encrypted) ---------- */
@@ -378,9 +480,12 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(!doc||!doc.core)return null;
     const k=await getTK(doc);if(!k)return null;
     const core=await openObj(k.tk,doc.core);if(!core)return null;
-    const reps={};
-    for(const aid of Object.keys(doc.rep||{})){const b=doc.rep[aid];const o=await openObj(k.tk,b);if(o)reps[aid]=Object.assign({},o,{at:b.at||"",by:b.by||""})}
-    return mk(id,doc,core,reps,k);
+    const raw={};
+    for(const key of Object.keys(doc.rep||{})){const b=doc.rep[key];const o=await openObj(k.tk,b);if(o)raw[key]=Object.assign({},o,{at:b.at||"",by:b.by||""})}
+    const t=mk(id,doc,core,{},k);
+    t.assignees.forEach(a=>{const r=(a.uid&&raw[a.uid])||raw[a.id];if(r)t.reps[a.id]=r});
+    t.hasUids=Array.isArray(doc.uids);
+    return t;
   }
   const repPayload=r=>({status:r.status||"todo",progress:Number(r.progress)||0,eta:r.eta||"",entries:Array.isArray(r.entries)?r.entries:[],note:r.note||""});
   function entriesOf(r){
@@ -405,45 +510,50 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     const removed=(t.depts||[]).some(d=>!nd.includes(d));
     if(!t.tkRaw||removed){t.tkRaw=crypto.getRandomValues(new Uint8Array(32));t.tk=await importDK(t.tkRaw);full=true}
     const wk={};for(const d of nd)wk[d]=await seal(keys[d],t.tkRaw);
-    const base={depts:nd,n:t.n||0,wk,core:await sealObj(t.tk,coreObj(t)),updatedAt:t.updatedAt||"",updatedBy:t.updatedBy||""};
+    const uids=[...new Set(t.assignees.map(a=>a.uid).filter(Boolean))];
+    const base={depts:nd,uids,n:t.n||0,wk,core:await sealObj(t.tk,coreObj(t)),updatedAt:t.updatedAt||"",updatedBy:t.updatedBy||""};
     if(full){
-      const rep={},ids=new Set(t.assignees.map(a=>a.id));
-      for(const aid of Object.keys(t.reps)){
-        if(!ids.has(aid))continue;const r=t.reps[aid];
+      const rep={};
+      for(const a of t.assignees){
+        const r=t.reps[a.id];if(!r)continue;
         const b=await sealObj(t.tk,repPayload(r));
-        rep[aid]={iv:b.iv,ct:b.ct,at:r.at||"",by:r.by||""};
+        rep[a.uid||a.id]={iv:b.iv,ct:b.ct,at:r.at||"",by:r.by||""};
       }
       base.rep=rep;
       await fb.set("tasks/"+t.id,base);
     }else await fb.merge("tasks/"+t.id,base);
-    t.depts=nd;
+    t.depts=nd;t.hasUids=true;
   }
   async function writeRep(t,aid){
     if(!t.tk){await writeCore(t,true);return}
-    const r=t.reps[aid];
+    const r=t.reps[aid], a=t.assignees.find(x=>x.id===aid), key=(a&&a.uid)||aid;
     const b=await sealObj(t.tk,repPayload(r));
-    await fb.merge("tasks/"+t.id,{rep:{[aid]:{iv:b.iv,ct:b.ct,at:r.at||"",by:r.by||""}},updatedAt:t.updatedAt||"",updatedBy:t.updatedBy||""});
+    await fb.merge("tasks/"+t.id,{rep:{[key]:{iv:b.iv,ct:b.ct,at:r.at||"",by:r.by||""}},updatedAt:t.updatedAt||"",updatedBy:t.updatedBy||""});
   }
 
   /* ---------- data ---------- */
   function subscribeData(){
     if(unsubs.length)return;
-    unsubs.push(fb.watchTasks(isDir()?null:role,async docs=>{
+    const filter=isDir()?null:(isHead()?{field:"depts",value:me.dept}:{field:"uids",value:me.uid});
+    unsubs.push(fb.watchTasks(filter,async docs=>{
       const seq=++snapSeq;
       const out=[];
       for(const d of docs){const t=await decodeDoc(d.id,d.data);if(t)out.push(t)}
       if(seq!==snapSeq||!role)return;
       tasks=out;loaded=true;render(false);
-      if(isDir()&&!renameDone)setTimeout(runRenames,2500);
+      if(isDir()){
+        out.filter(t=>!t.hasUids&&!migrUids.has(t.id)).forEach(t=>{migrUids.add(t.id);enqueue(t.id,()=>writeCore(t,false)).catch(()=>migrUids.delete(t.id))});
+        if(!renameDone)setTimeout(runRenames,2500);
+      }
     },err=>{loaded=true;render(true);toast("Немає доступу до задач: "+((err&&err.code)||"помилка"))}));
-    const deptDocs=isDir()?DEPTS.map(d=>d.id):[role];
+    const deptDocs=isDir()?DEPTS.map(d=>d.id):[me.dept];
     deptDocs.forEach(d=>{
       unsubs.push(fb.watchDoc("plans/"+d,async doc=>{
         if(!role)return;
         if(!doc){delete plans[d]}else{const o=await openObj(keys[d],doc);if(o)plans[d]=Object.assign({},o,{updatedAt:doc.updatedAt})}
         if(editingInside())pendingRender=true;else renderPlans();
       },()=>{}));
-      unsubs.push(fb.watchDoc("staff/"+d,async doc=>{
+      if(isDir()||isHead())unsubs.push(fb.watchDoc("staff/"+d,async doc=>{
         if(!role)return;
         if(doc){const o=await openObj(keys[d],doc);if(o&&Array.isArray(o.people)){
           let fix=false;
@@ -455,6 +565,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       },()=>{}));
     });
   }
+  const migrUids=new Set();
   const queues={};
   function enqueue(id,fn){const p=(queues[id]||Promise.resolve()).then(fn,fn);queues[id]=p.catch(()=>{});return p}
   function writeErr(e){
@@ -479,7 +590,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(!canRep(t,a)){toast("Цей звіт заповнює інший підрозділ.");return false}
     const r=Object.assign({status:"todo"},t.reps[aid]||{});
     const entries=entriesOf(r).map(e=>e.id==="legacy"?Object.assign({},e,{id:uid()}):e);
-    entries.unshift({id:uid(),at:new Date().toISOString(),by:role,type,text});
+    entries.unshift({id:uid(),at:new Date().toISOString(),by:role,who:isDir()?"Директор":((me&&me.name)||""),type,text});
     const f={entries,note:""};
     if(type==="issue")f.status="issue";
     else if(r.status==="todo")f.status="doing";
@@ -497,6 +608,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   let renameDone=false;
   function runRenames(){
     if(renameDone||!isDir()||!loaded)return;renameDone=true;
+    syncUids();
     tasks.forEach(t=>{
       let ch=false;
       const nb=renameStr(t.block);if(nb!==t.block){t.block=nb;ch=true}
@@ -541,6 +653,60 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     });
     touched.forEach(saveStaff);
   }
+  /* ---------- personal access (director) ---------- */
+  function relinkTasks(pid){
+    const f=findPerson(pid), u=f&&f.p.uid?f.p.uid:"";
+    let n=0;
+    tasks.forEach(t=>{
+      let ch=false;
+      t.assignees.forEach(a=>{if(a.pid===pid&&(a.uid||"")!==u){if(u)a.uid=u;else delete a.uid;ch=true}});
+      if(ch){n++;stamp(t);enqueue(t.id,()=>writeCore(t,true)).catch(writeErr)}
+    });
+    if(n)render(true);
+    return n;
+  }
+  function syncUids(){
+    if(!isDir())return;
+    const pids=new Set();
+    tasks.forEach(t=>t.assignees.forEach(a=>{if(!a.pid)return;const f=findPerson(a.pid);if(f&&(a.uid||"")!==(f.p.uid||""))pids.add(a.pid)}));
+    pids.forEach(relinkTasks);
+  }
+  async function grantAccess(pid){
+    const f=findPerson(pid);if(!f)throw new Error("Картку не знайдено.");
+    const digits=normPhone(f.p.phone);if(!digits)throw new Error("Вкажіть у картці правильний номер телефону.");
+    if(!rawKeys[f.dept])throw new Error("Немає ключа підрозділу.");
+    const lg=await fb.get("logins/"+digits);
+    const oldUid=f.p.uid||null;
+    if(lg&&lg.uid&&lg.uid!==oldUid&&DEPTS.some(d=>(staff[d.id]||[]).some(x=>x.uid===lg.uid&&x.id!==pid)))throw new Error("Цей номер уже має доступ в іншій картці.");
+    let gen=((lg&&lg.gen)||0), temp=genTemp(), newUid=null;
+    for(let i=0;i<6&&!newUid;i++){
+      gen++;
+      try{newUid=await fb.createUser(loginEmail(digits,gen),temp)}
+      catch(ex){if(!/email-already-in-use/.test((ex&&ex.code)||""))throw ex}
+    }
+    if(!newUid)throw new Error("Не вдалося створити обліковий запис.");
+    const salt=b64(crypto.getRandomValues(new Uint8Array(16)));
+    const kek=await deriveKek(temp,salt,ITER);
+    const wrap={[f.dept]:await seal(kek,rawKeys[f.dept])};
+    const now=new Date().toISOString();
+    await fb.set("people/"+newUid,{pid,dept:f.dept,head:!!f.p.head,name:f.p.name,position:f.p.position||"",phone:digits,gen,salt,iter:ITER,wrap,mustChange:true,pwAt:now,createdAt:now});
+    await fb.set("logins/"+digits,{gen,uid:newUid});
+    if(oldUid&&oldUid!==newUid){try{await fb.del("people/"+oldUid)}catch(_){}}
+    f.p.uid=newUid;f.p.phone=fmtPhone(digits);
+    await saveStaff(f.dept);
+    relinkTasks(pid);
+    return {name:f.p.name,phone:fmtPhone(digits),temp};
+  }
+  async function revokeAccess(pid){
+    const f=findPerson(pid);if(!f||!f.p.uid)return;
+    const digits=normPhone(f.p.phone), old=f.p.uid;
+    await fb.del("people/"+old);
+    if(digits){try{const lg=await fb.get("logins/"+digits);await fb.set("logins/"+digits,{gen:(lg&&lg.gen)||0,uid:null})}catch(_){}}
+    delete f.p.uid;
+    await saveStaff(f.dept);
+    relinkTasks(pid);
+  }
+
   function applyPerson(pid,match){
     const f=findPerson(pid);if(!f)return 0;
     let n=0;
@@ -548,7 +714,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       let ch=false;
       t.assignees.forEach(a=>{
         if(a.pid===pid||(match&&!(a.pid&&findPerson(a.pid))&&match(a))){
-          if(a.pid!==pid||a.name!==f.p.name||a.position!==f.p.position||a.dept!==f.dept){Object.assign(a,{pid,name:f.p.name,position:f.p.position,dept:f.dept});ch=true}
+          if(a.pid!==pid||a.name!==f.p.name||a.position!==f.p.position||a.dept!==f.dept||(a.uid||"")!==(f.p.uid||"")){Object.assign(a,{pid,name:f.p.name,position:f.p.position,dept:f.dept});if(f.p.uid)a.uid=f.p.uid;else delete a.uid;ch=true}
         }
       });
       if(ch){n++;stamp(t);enqueue(t.id,()=>writeCore(t,true)).catch(writeErr)}
@@ -607,7 +773,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   function asgBlock(t,a){
     const r=t.reps[a.id]||{}, st=r.status||"todo", es=entriesOf(r), le=es[0];
     return `<div class="asg"><div class="asg-h">${who(a,t)}${statusPill(st)}</div>${progBar(r)}
-      ${le?`<div class="asg-last"><span class="etype et-${esc(le.type)}">${esc(typeName(le.type))}</span> ${esc(le.text)}</div><span class="upd">${fmtStamp(le.at)}${le.by?" · "+esc(roleName(le.by)):""}${es.length>1?" · усього записів: "+es.length:""}</span>`
+      ${le?`<div class="asg-last"><span class="etype et-${esc(le.type)}">${esc(typeName(le.type))}</span> ${esc(le.text)}</div><span class="upd">${fmtStamp(le.at)}${(le.who||le.by)?" · "+esc(le.who||roleName(le.by)):""}${es.length>1?" · усього записів: "+es.length:""}</span>`
         :`<div class="note">Записів ще немає${canRep(t,a)?" — відкрийте задачу, щоб додати":""}</div>`}</div>`;
   }
   function renderDepts(){
@@ -864,8 +1030,8 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
         <div><button class="btn primary" type="button" data-addentry="${aid}">Додати запис</button></div>
       </div>`
       :`<div class="rep-ro">${statusPill(st)}${progBar(r)}</div>`;
-    const hist=es.length?`<ul class="hist">${es.map(e=>`<li><div class="hist-h"><span class="etype et-${esc(e.type)}">${esc(typeName(e.type))}</span><span class="upd">${fmtStamp(e.at)}${e.by?" · "+esc(roleName(e.by)):""}</span></div><div class="hist-t">${esc(e.text)}</div></li>`).join("")}</ul>`:`<p class="note">Записів ще немає.</p>`;
-    return `<section class="rep ${ok&&!isDir()?"mine":""}" data-aid="${aid}"><div class="asg-h">${who(a,t)}${ok&&!isDir()?'<span class="mine-tag">ваш розділ</span>':""}</div>${controls}<div class="fl"><label>Історія записів</label>${hist}</div></section>`;
+    const hist=es.length?`<ul class="hist">${es.map(e=>`<li><div class="hist-h"><span class="etype et-${esc(e.type)}">${esc(typeName(e.type))}</span><span class="upd">${fmtStamp(e.at)}${(e.who||e.by)?" · "+esc(e.who||roleName(e.by)):""}</span></div><div class="hist-t">${esc(e.text)}</div></li>`).join("")}</ul>`:`<p class="note">Записів ще немає.</p>`;
+    return `<section class="rep ${ok&&!isDir()?"mine":""}" data-aid="${aid}"><div class="asg-h">${who(a,t)}${ok&&!isDir()?'<span class="mine-tag">'+(me&&a.uid===me.uid?"це ви":"ваш підрозділ")+'</span>':""}</div>${controls}<div class="fl"><label>Історія записів</label>${hist}</div></section>`;
   }
   function repSection(t){
     if(!t)return `<p class="note">Статуси й записи відповідальних з'являться тут після збереження задачі.</p>`;
@@ -956,7 +1122,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       const list=[];
       $("#asgList").querySelectorAll(".asg-row2").forEach(r=>{
         const v=r.querySelector(".a-person").value;
-        if(v&&v!=="__manual"){const f=findPerson(v);if(f)list.push({id:r.dataset.aid,pid:v,dept:f.dept,position:f.p.position,name:f.p.name});return}
+        if(v&&v!=="__manual"){const f=findPerson(v);if(f)list.push(Object.assign({id:r.dataset.aid,pid:v,dept:f.dept,position:f.p.position,name:f.p.name},f.p.uid?{uid:f.p.uid}:{}));return}
         if(v!=="__manual")return;
         const pos=r.querySelector(".a-pos").value.trim(), name=r.querySelector(".a-name").value.trim();
         if(pos||name)list.push({id:r.dataset.aid,dept:r.querySelector(".a-dept").value,position:pos,name});
@@ -981,7 +1147,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     <div class="dlg-f"><div class="r"><button class="btn" type="button" id="staffClose">Готово</button></div></div></div></dialog>`);
   $("#settingsBtn").insertAdjacentHTML("beforebegin",`<button class="btn" id="staffBtn" type="button" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.3-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.3 3.3 0 0 1 0 6.6M18 14.8c2 .7 3.2 2.4 3.6 5.2"/></svg>Працівники</button>`);
   const staffDlg=$("#staffDlg");
-  let staffForm=null, unlinked=[], pendingAssign=false;
+  let staffForm=null, unlinked=[], pendingAssign=false, grantInfo=null, accBusy=false;
   const initials=n=>String(n||"?").trim().split(/\s+/).slice(0,2).map(w=>w[0]||"").join("").toUpperCase()||"?";
   function openStaff(opts){
     if(!isDir())return;
@@ -993,7 +1159,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   function closeStaff(){staffForm=null;pendingAssign=false;try{staffDlg.close()}catch(e){staffDlg.removeAttribute("open")}}
   $("#staffBtn").addEventListener("click",()=>openStaff(null));
   $("#staffClose").addEventListener("click",closeStaff);
-  staffDlg.addEventListener("close",()=>{staffForm=null;pendingAssign=false});
+  staffDlg.addEventListener("close",()=>{staffForm=null;pendingAssign=false;grantInfo=null});
   function personForm(f){
     const ex=f.mode==="edit"?findPerson(f.pid):null;
     const p=ex?ex.p:{name:f.link?f.link.name:"",position:f.link?f.link.position:"",phone:"",note:""};
@@ -1002,9 +1168,11 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       <div class="grid2">
         <div class="fl"><label for="pfName">ПІБ</label><input class="field" id="pfName" value="${esc(p.name)}" placeholder="Петренко Іван Іванович"></div>
         <div class="fl"><label for="pfPos">Посада</label><input class="field" id="pfPos" list="pos-${d}" value="${esc(p.position)}" placeholder="Напр., Головний інженер"></div>
-        <div class="fl"><label for="pfDept">Підрозділ</label><select class="field" id="pfDept">${DEPTS.map(x=>`<option value="${x.id}" ${x.id===d?"selected":""}>${x.name}</option>`).join("")}</select></div>
-        <div class="fl"><label for="pfPhone">Телефон</label><input class="field mono" id="pfPhone" type="tel" value="${esc(p.phone||"")}" placeholder="+380…"></div>
+        <div class="fl"><label for="pfDept">Підрозділ</label><select class="field" id="pfDept" ${p.uid?"disabled":""}>${DEPTS.map(x=>`<option value="${x.id}" ${x.id===d?"selected":""}>${x.name}</option>`).join("")}</select></div>
+        <div class="fl"><label for="pfPhone">Телефон (логін для входу)</label><input class="field mono" id="pfPhone" type="tel" value="${esc(p.phone||"")}" placeholder="+380 50 123 45 67" ${p.uid?"disabled":""}></div>
       </div>
+      <label class="remember" for="pfHead"><input type="checkbox" id="pfHead" ${p.head?"checked":""}> Керівник підрозділу — бачить усі задачі свого підрозділу</label>
+      ${p.uid?`<p class="note">Працівник має доступ, тому номер і підрозділ змінити не можна. Щоб змінити їх, спочатку закрийте доступ.</p>`:""}
       <div class="fl"><label for="pfNote">Примітка</label><input class="field" id="pfNote" value="${esc(p.note||"")}" placeholder="Напр., відповідає за верстати з ЧПК"></div>
       ${f.link?`<p class="note">Картку буде прив'язано до задач, де зараз вказано «${esc(personLabel(f.link))}».</p>`:""}
       ${ex&&ex.dept!==undefined?`<p class="note">Задач у працівника: ${tasks.filter(t=>t.assignees.some(a=>a.pid===f.pid)).length}. Зміни застосуються до всіх.</p>`:""}
@@ -1024,6 +1192,8 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
           `<article class="pcard"><div class="pc-top"><span class="avatar">${esc(initials(p.name))}</span><div class="pc-main"><b>${esc(p.name)}</b><span>${esc(p.position||"Посаду не вказано")}</span></div>
             <button class="btn ghost" type="button" data-pedit="${esc(p.id)}">Редагувати</button></div>
             ${p.phone||p.note?`<div class="pc-meta">${p.phone?`<span class="mono">${esc(p.phone)}</span>`:""}${p.note?`<span>${esc(p.note)}</span>`:""}</div>`:""}
+            <div class="pc-acc">${p.uid?`<span class="acc on">Доступ активний${p.head?" · керівник":""}</span><span class="acc-btns"><button class="btn ghost sm" type="button" data-preset="${esc(p.id)}">Скинути пароль</button><button class="btn ghost sm danger-t" type="button" data-prevoke="${esc(p.id)}">Закрити доступ</button></span>`
+              :(normPhone(p.phone)?`<span class="acc">Доступу немає</span><button class="btn sm" type="button" data-pgrant="${esc(p.id)}">Надати доступ</button>`:`<span class="acc">Вкажіть телефон, щоб надати доступ</span>`)}</div>
             <div class="pc-foot">Задач: ${cnt(p.id)}</div></article>`).join("")}${!list.length&&!adding?'<p class="note">Карток ще немає.</p>':""}</div></section>`;
     });
     const um=new Map();
@@ -1041,6 +1211,11 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
           `<article class="pcard dashed"><div class="pc-top"><span class="avatar">?</span><div class="pc-main"><b>${esc(u.name||u.position||"Без назви")}</b><span>${u.name?esc(u.position)+" · ":""}${esc(deptName(u.dept))}</span></div>
             <button class="btn" type="button" data-plink="${i}">Створити картку</button></div><div class="pc-foot">Задач: ${u.n}</div></article>`).join("")}</div></section>`;
     }
+    if(grantInfo)html=`<section class="grant-box" role="status"><div><b>Доступ для: ${esc(grantInfo.name)}</b>
+        <div class="grant-row"><span>Логін (телефон)</span><code>${esc(grantInfo.phone)}</code></div>
+        <div class="grant-row"><span>Тимчасовий пароль</span><code id="grantTemp">${esc(grantInfo.temp)}</code></div>
+        <p class="note">Передайте особисто. Пароль показано один раз. При першому вході працівник задасть власний пароль.</p></div>
+        <div class="grant-act"><button class="btn sm" type="button" id="grantCopy">Копіювати</button><button class="btn ghost sm" type="button" id="grantDone">Закрити</button></div></section>`+html;
     $("#staffBody").innerHTML=html;
     const f=$("#pfName");if(f){f.focus();if(f.scrollIntoView)f.scrollIntoView({block:"nearest"})}
   }
@@ -1050,10 +1225,27 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     else if(t.dataset.pedit){const f=findPerson(t.dataset.pedit);if(f){staffForm={mode:"edit",pid:f.p.id,dept:f.dept};renderStaff()}}
     else if(t.dataset.plink!==undefined){const u=unlinked[Number(t.dataset.plink)];if(u){staffForm={mode:"link",key:Number(t.dataset.plink),dept:u.dept,link:u};renderStaff()}}
     else if(t.id==="pfCancel"){staffForm=null;renderStaff()}
+    else if(t.id==="grantDone"){grantInfo=null;renderStaff()}
+    else if(t.id==="grantCopy"&&grantInfo){
+      const txt="Задачі НТЦ МЕТА\nЛогін: "+grantInfo.phone+"\nТимчасовий пароль: "+grantInfo.temp+"\nСайт: "+location.href.split("#")[0];
+      try{navigator.clipboard.writeText(txt).then(()=>toast("Скопійовано"),()=>toast("Виділіть і скопіюйте вручну"))}catch(_){toast("Виділіть і скопіюйте вручну")}
+    }
+    else if((t.dataset.pgrant||t.dataset.preset)&&!accBusy){
+      const pid=t.dataset.pgrant||t.dataset.preset;
+      if(t.dataset.preset&&t.dataset.sure!=="1"){t.dataset.sure="1";t.textContent="Підтвердити скидання";return}
+      accBusy=true;t.disabled=true;t.textContent="Створення…";
+      grantAccess(pid).then(r=>{grantInfo=r;toast(t.dataset.preset?"Пароль скинуто":"Доступ надано")},ex=>{toast(ex.code?authMsg(ex):(ex.message||"Помилка"));}).finally(()=>{accBusy=false;renderStaff()});
+    }
+    else if(t.dataset.prevoke&&!accBusy){
+      if(t.dataset.sure!=="1"){t.dataset.sure="1";t.textContent="Підтвердити закриття";return}
+      accBusy=true;t.disabled=true;
+      revokeAccess(t.dataset.prevoke).then(()=>toast("Доступ закрито"),writeErr).finally(()=>{accBusy=false;renderStaff()});
+    }
     else if(t.id==="pfDelBtn"){$("#pfDel").innerHTML=`<span class="confirm">Видалити картку? У задачах ім'я залишиться текстом. <button class="btn danger" type="button" id="pfDelYes">Так</button><button class="btn" type="button" id="pfDelNo">Ні</button></span>`}
     else if(t.id==="pfDelNo"){$("#pfDel").innerHTML='<button class="btn danger" type="button" id="pfDelBtn">Видалити картку</button>'}
     else if(t.id==="pfDelYes"&&staffForm&&staffForm.mode==="edit"){
       const f=findPerson(staffForm.pid);
+      if(f&&f.p.uid){revokeAccess(f.p.id).catch(()=>{})}
       if(f){staff[f.dept]=staff[f.dept].filter(x=>x.id!==f.p.id);saveStaff(f.dept)}
       staffForm=null;renderStaff();renderDatalists();refreshPersonSelects();toast("Картку видалено");
     }
@@ -1062,13 +1254,19 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   $("#staffBody").addEventListener("submit",e=>{
     e.preventDefault();
     if(!staffForm||!isDir())return;
-    const name=$("#pfName").value.trim(), pos=$("#pfPos").value.trim(), d=$("#pfDept").value, phone=$("#pfPhone").value.trim(), note=$("#pfNote").value.trim();
+    const name=$("#pfName").value.trim(), pos=$("#pfPos").value.trim(), note=$("#pfNote").value.trim(), head=$("#pfHead").checked;
+    let d=$("#pfDept").value, phone=$("#pfPhone").value.trim();
     if(!name){$("#pfErr").textContent="Вкажіть ПІБ.";$("#pfName").focus();return}
+    const cur=staffForm.mode==="edit"?findPerson(staffForm.pid):null;
+    if(cur&&cur.p.uid){d=cur.dept;phone=cur.p.phone}
+    if(phone){const nd=normPhone(phone);if(!nd){$("#pfErr").textContent="Невірний номер телефону. Приклад: +380 50 123 45 67.";$("#pfPhone").focus();return}phone=fmtPhone(nd)}
+    if(phone&&!(cur&&cur.p.uid)){const nd=normPhone(phone);const clash=DEPTS.some(x=>(staff[x.id]||[]).some(q=>q.id!==(cur&&cur.p.id)&&normPhone(q.phone)===nd));if(clash){$("#pfErr").textContent="Цей номер уже вказано в іншій картці.";return}}
     let pid;
     if(staffForm.mode==="edit"){
       const f=findPerson(staffForm.pid);if(!f){staffForm=null;renderStaff();return}
       pid=f.p.id;
-      const upd=Object.assign({},f.p,{name,position:pos,phone,note});
+      const upd=Object.assign({},f.p,{name,position:pos,phone,note,head});
+      if(f.p.uid&&(f.p.head!==head||f.p.name!==name||f.p.position!==pos))fb.merge("people/"+f.p.uid,{head,name,position:pos}).catch(writeErr);
       staff[f.dept]=(staff[f.dept]||[]).filter(x=>x.id!==pid);
       if(f.dept!==d)saveStaff(f.dept);
       (staff[d]=staff[d]||[]).push(upd);saveStaff(d);
@@ -1076,7 +1274,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       const dup=(staff[d]||[]).find(x=>x.name.toLowerCase()===name.toLowerCase());
       if(dup&&staffForm.mode!=="link"){$("#pfErr").textContent="Картка з таким ПІБ у цьому підрозділі вже є.";return}
       if(dup){pid=dup.id}
-      else{pid=uid();(staff[d]=staff[d]||[]).push({id:pid,name,position:pos,phone,note});saveStaff(d)}
+      else{pid=uid();(staff[d]=staff[d]||[]).push({id:pid,name,position:pos,phone,note,head});saveStaff(d)}
     }
     const link=staffForm.mode==="link"?staffForm.link:null;
     const n=applyPerson(pid,link?(a=>a.dept===link.dept&&(a.position||"")===link.position&&(a.name||"")===link.name):null);
@@ -1110,6 +1308,19 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
 .pc-main span{font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pc-meta{display:flex;flex-direction:column;gap:2px;font-size:12.5px;color:var(--muted)}
 .pc-foot{font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:6px}
+.pc-acc{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.acc{font-size:12px;font-weight:700;color:var(--muted)}
+.acc.on{color:var(--done);background:var(--done-bg);border-radius:4px;padding:1px 8px}
+.acc-btns{display:flex;gap:4px;flex-wrap:wrap}
+.btn.sm{padding:5px 10px;font-size:12.5px}
+.danger-t{color:var(--issue)}
+.grant-box{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;border:1px solid var(--done);background:var(--done-bg);border-radius:12px;padding:14px}
+.grant-box>div:first-child{display:flex;flex-direction:column;gap:6px;min-width:0}
+.grant-row{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:13px}
+.grant-row span{color:var(--muted);min-width:150px}
+.grant-row code{font-family:var(--font-mono);font-size:16px;font-weight:600;color:var(--fg);user-select:all}
+.grant-act{display:flex;gap:6px;align-items:flex-start}
+.roles.two{grid-template-columns:repeat(2,minmax(0,1fr))}
 .asg-row2{display:flex;flex-direction:column;gap:8px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
 .asg-pick{display:flex;gap:8px;align-items:center}
 .asg-pick select{flex:1;min-width:0}
@@ -1286,21 +1497,38 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   /* ---------- passwords (director) ---------- */
   const pwDlg=$("#pwDlg");
   function renderPwSet(){
-    $("#pwSet").innerHTML=Object.keys(ROLES).map(k=>{
-      const ch=vault&&vault.changedAt&&vault.changedAt[k];
-      return `<div class="pwitem"><div class="pwitem-h"><b>${ROLES[k].name}</b>${ch?`<span class="tag-ok">змінено ${fmtStamp(ch)}</span>`:""}</div>
-        <input class="field" type="password" id="cp-${k}" placeholder="Поточний пароль розділу" autocomplete="current-password">
+    $("#pwSet").innerHTML=(isDir()?["director"]:["me"]).map(k=>{
+      const ch=k==="director"?(vault&&vault.changedAt&&vault.changedAt[k]):(me&&me.pwAt);
+      return `<div class="pwitem"><div class="pwitem-h"><b>${k==="me"?"Ваш пароль":"Пароль директора"}</b>${ch?`<span class="tag-ok">змінено ${fmtStamp(ch)}</span>`:""}</div>
+        <input class="field" type="password" id="cp-${k}" placeholder="Поточний пароль" autocomplete="current-password">
         <div class="grid2"><input class="field" type="password" id="np-${k}" placeholder="Новий пароль" autocomplete="new-password"><input class="field" type="password" id="np2-${k}" placeholder="Повторіть новий пароль" autocomplete="new-password"></div>
         <div class="pwrow"><button class="btn" type="button" data-setpw="${k}">Змінити пароль</button><span class="err" id="pe-${k}"></span></div></div>`;
     }).join("");
   }
-  function openPw(){if(!isDir())return;renderPwSet();try{pwDlg.showModal()}catch(e){pwDlg.setAttribute("open","")}}
+  function openPw(){if(!isDir()&&!me)return;
+    const n=$("#pwDlg .note");if(n)n.textContent=isDir()?"Тут змінюється пароль директора. Паролі працівників — у «Працівники» → «Скинути пароль». Пароль директора не можна втрачати: без нього дані не розшифрувати.":"Мінімум 8 символів, літери й цифри. Після зміни на інших пристроях потрібно буде увійти знову.";
+    renderPwSet();try{pwDlg.showModal()}catch(e){pwDlg.setAttribute("open","")}}
   $("#settingsBtn").addEventListener("click",openPw);
   $("#pwClose").addEventListener("click",()=>{try{pwDlg.close()}catch(e){pwDlg.removeAttribute("open")}});
   $("#pwSet").addEventListener("click",async e=>{
-    const b=e.target.closest("[data-setpw]");if(!b||!isDir()||!vault)return;
+    const b=e.target.closest("[data-setpw]");if(!b)return;
     const k=b.dataset.setpw, cur=$("#cp-"+k).value, p1=$("#np-"+k).value, p2=$("#np2-"+k).value, err=$("#pe-"+k);
     err.textContent="";
+    if(k==="me"){
+      if(!me)return;
+      if(!cur){err.textContent="Введіть поточний пароль.";return}
+      if(!pwOk(p1,MIN_PW_STAFF)){err.textContent="Щонайменше "+MIN_PW_STAFF+" символів, літери й цифри.";return}
+      if(p1!==p2){err.textContent="Нові паролі не збігаються.";return}
+      b.disabled=true;b.textContent="Зміна…";
+      try{
+        try{await fb.verifyPassword(me.email,cur)}catch(ex){throw new Error("Поточний пароль невірний.")}
+        await setOwnPassword(cur,p1);
+        toast("Пароль змінено");["cp-","np-","np2-"].forEach(x=>$("#"+x+k).value="");renderPwSet();
+      }catch(ex){err.textContent=ex.code?authMsg(ex):(ex.message||"Не вдалося змінити пароль.")}
+      b.disabled=false;b.textContent="Змінити пароль";
+      return;
+    }
+    if(!isDir()||!vault)return;
     if(!cur){err.textContent="Введіть поточний пароль розділу.";return}
     if(p1.length<MIN_PW){err.textContent="Новий пароль: щонайменше "+MIN_PW+" символів.";return}
     if(!(/[A-Za-zА-Яа-яІіЇїЄєҐґ]/.test(p1)&&/\d/.test(p1))){err.textContent="Додайте і літери, і цифри.";return}

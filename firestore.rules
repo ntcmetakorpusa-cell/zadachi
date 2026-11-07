@@ -1,39 +1,63 @@
 rules_version = '2';
-// Правила доступу до бази. Скопіюйте весь цей текст у Firebase → Firestore Database → Rules → Publish.
+// Правила доступу до бази (особисті входи за телефоном).
+// Скопіюйте весь цей текст у Firebase → Firestore Database → Rules → Publish.
 service cloud.firestore {
   match /databases/{database}/documents {
-    function email() { return request.auth != null ? request.auth.token.email : ''; }
-    function isDirector() { return email() == 'director@zadachi.example'; }
-    function dept() {
-      return email() == 'vyrobnytstvo@zadachi.example' ? 'vyrobnytstvo'
-           : email() == 'administratsiia@zadachi.example' ? 'administratsiia' : '';
+    function signedIn() { return request.auth != null; }
+    function isDirector() { return signedIn() && request.auth.token.email == 'director@zadachi.example'; }
+    function personPath() { return /databases/$(database)/documents/people/$(request.auth.uid); }
+    function isPerson() { return signedIn() && exists(personPath()); }
+    function me() { return get(personPath()).data; }
+    function isHeadOf(d) { return isPerson() && me().head == true && me().dept == d; }
+    // Працівник бачить задачу, якщо він у ній відповідальний;
+    // керівник підрозділу — усі задачі свого підрозділу.
+    function canSeeTask(data) {
+      return isPerson() && (request.auth.uid in data.uids || (me().head == true && me().dept in data.depts));
     }
-    function isStaff() { return isDirector() || dept() != ''; }
 
-    // Ключі шифрування (самі по собі зашифровані паролями). Змінює лише директор.
+    // Ключі директора (зашифровані паролем директора).
     match /settings/vault {
-      allow read: if isStaff();
+      allow read, write: if isDirector();
+    }
+
+    // Логін за номером: лише номер покоління облікового запису, без паролів і даних.
+    match /logins/{phone} {
+      allow get: if true;
+      allow list: if false;
       allow write: if isDirector();
     }
 
-    // Задачі: підрозділ бачить лише задачі, де він бере участь,
-    // і може змінювати лише звіти (поле rep), а не саму задачу.
-    match /tasks/{taskId} {
-      allow read: if isDirector() || (dept() != '' && dept() in resource.data.depts);
+    // Профіль доступу працівника. Створює, змінює права й видаляє лише директор.
+    // Сам працівник може змінити тільки свій пароль (ключ, сіль, позначку першого входу).
+    match /people/{uid} {
+      allow read: if isDirector() || (signedIn() && request.auth.uid == uid);
       allow create, delete: if isDirector();
       allow update: if isDirector()
-        || (dept() != '' && dept() in resource.data.depts
-            && request.resource.data.depts == resource.data.depts
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rep', 'updatedAt', 'updatedBy']));
+        || (signedIn() && request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['wrap', 'salt', 'mustChange', 'pwAt']));
     }
 
-    // Плани та довідник працівників: підрозділ читає лише свій, змінює директор.
+    // Задачі. Працівник змінює лише власний звіт (rep.<його uid>),
+    // керівник — звіти працівників свого підрозділу. Саму задачу змінює директор.
+    match /tasks/{taskId} {
+      allow read: if isDirector() || canSeeTask(resource.data);
+      allow create, delete: if isDirector();
+      allow update: if isDirector()
+        || (canSeeTask(resource.data)
+            && request.resource.data.depts == resource.data.depts
+            && request.resource.data.get('uids', []) == resource.data.get('uids', [])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rep', 'updatedAt', 'updatedBy'])
+            && (me().head == true
+                || request.resource.data.get('rep', {}).diff(resource.data.get('rep', {})).affectedKeys().hasOnly([request.auth.uid])));
+    }
+
+    // Плани: працівник читає план свого підрозділу. Довідник працівників — директор і керівник.
     match /plans/{d} {
-      allow read: if isDirector() || d == dept();
+      allow read: if isDirector() || (isPerson() && me().dept == d);
       allow write: if isDirector();
     }
     match /staff/{d} {
-      allow read: if isDirector() || d == dept();
+      allow read: if isDirector() || isHeadOf(d);
       allow write: if isDirector();
     }
 
