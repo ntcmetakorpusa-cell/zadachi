@@ -188,6 +188,8 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   const isDir=()=>role==="director";
   const canEditAll=()=>isDir();
   const isHead=()=>!!(me&&me.head);
+  const dirProfile=()=>(vault&&vault.profile)||{};
+  const dirName=()=>"Директор"+(dirProfile().name?" "+dirProfile().name:"");
   const canRep=(t,a)=>!!a&&(isDir()||(isHead()&&a.dept===me.dept)||(!!me&&!!a.uid&&a.uid===me.uid));
   const LOGIN_DOMAIN=String(EMAIL.director||"director@zadachi.example").split("@")[1]||"zadachi.example";
   function normPhone(v){let d=String(v||"").replace(/\D/g,"");if(d.length===10&&d[0]==="0")d="38"+d;return d.length>=11&&d.length<=15?d:null}
@@ -402,14 +404,16 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   function enter(){
     ui.dept=isDir()?"all":role; ui.q=ui.block=ui.owner=ui.prio=ui.status=""; $("#q").value="";
     show("#app");
-    $("#whoBadge").textContent=isDir()?"Директор":((me.name||deptName(me.dept))+(isHead()?" · керівник":""));
+    $("#whoBadge").textContent=isDir()?(dirProfile().name||"Директор"):((me.name||deptName(me.dept))+(isHead()?" · керівник":""));
     $("#appTitle").textContent=isDir()?ROLES.director.title:(isHead()?"Задачі підрозділу «"+deptName(me.dept)+"»":"Мої задачі");
     $("#settingsBtn").hidden=false;
     { const tn=[...$("#settingsBtn").childNodes].reverse().find(n=>n.nodeType===3&&n.textContent.trim());if(tn)tn.textContent=isDir()?" Паролі ":" Мій пароль "; }
     $("#depts").hidden=!isDir();
     $("#staffBtn").hidden=!isDir();
-    $("#notifyBtn").hidden=false;
-    $("#tplBtn").hidden=!isDir();
+    ["#staffBtn","#tplBtn","#notifyBtn","#settingsBtn"].forEach(id=>{const b=$(id);if(b)b.hidden=true});
+    closeCabinet(true);
+    $("#cabBtn").hidden=false;$("#cabBtnTxt").textContent=isDir()?"Кабінет":"Мій кабінет";
+    $("#tplBtn").hidden=true;
     $("#footNote").textContent=isDir()
       ?"Ви ставите задачі, призначаєте відповідальних з будь-якого підрозділу, задаєте терміни, плани та паролі. Кожен відповідальний пише свій звіт. Дані зашифровані."
       :(isHead()?"Ви бачите всі задачі свого підрозділу й можете оновлювати статуси та записи його працівників. Нові задачі й терміни задає директор."
@@ -426,6 +430,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     render(true);
   }
   async function logout(msg){
+    closeCabinet(true);
     role=null;keys={};rawKeys={};vault=null;me=null;notifyCfg=null;notifyMap=null;stopLink();
     if(unsubMe){try{unsubMe()}catch(e){}unsubMe=null}
     clearSession();
@@ -443,7 +448,8 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
   function onVault(){
     if(((vault.rev||{}).director||0)!==sessionRev){logout("Пароль директора змінено. Увійдіть з новим паролем.");return}
     renderBanner();
-    if($("#pwDlg").open)renderPwSet();
+    if($("#pwDlg").open||cabIs("security"))renderPwSet();
+    if(cabIs("profile"))showTab("profile");
   }
 
   /* restore a remembered session after reload */
@@ -549,7 +555,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       }
     },err=>{loaded=true;render(true);toast("Немає доступу до задач: "+((err&&err.code)||"помилка"))}));
     const deptDocs=isDir()?DEPTS.map(d=>d.id):[me.dept];
-    unsubs.push(fb.watchDoc("settings/notify",d=>{notifyCfg=d||null;if($("#notifyDlg").open)renderNotify()},()=>{}));
+    unsubs.push(fb.watchDoc("settings/notify",d=>{notifyCfg=d||null;if($("#notifyDlg").open||cabIs("notify"))renderNotify();if(cabIs("profile"))showTab("profile")},()=>{}));
     deptDocs.forEach(d=>{
       unsubs.push(fb.watchDoc("plans/"+d,async doc=>{
         if(!role)return;
@@ -572,7 +578,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
           if(fix&&isDir())saveStaff(d);
         }}
         renderDatalists();
-        if($("#staffDlg").open&&!staffForm)renderStaff();
+        if(($("#staffDlg").open||cabIs("staff"))&&!staffForm)renderStaff();
       },()=>{}));
     });
   }
@@ -601,7 +607,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(!canRep(t,a)){toast("Цей звіт заповнює інший підрозділ.");return false}
     const r=Object.assign({status:"todo"},t.reps[aid]||{});
     const entries=entriesOf(r).map(e=>e.id==="legacy"?Object.assign({},e,{id:uid()}):e);
-    entries.unshift({id:uid(),at:new Date().toISOString(),by:role,who:isDir()?"Директор":((me&&me.name)||""),type,text});
+    entries.unshift({id:uid(),at:new Date().toISOString(),by:role,who:isDir()?dirName():((me&&me.name)||""),type,text});
     const f={entries,note:""};
     if(type==="issue")f.status="issue";
     else if(r.status==="todo")f.status="doing";
@@ -704,7 +710,10 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     const now=new Date().toISOString();
     await fb.set("people/"+newUid,{pid,dept:f.dept,head:!!f.p.head,name:f.p.name,position:f.p.position||"",phone:digits,gen,salt,iter:ITER,wrap,mustChange:true,pwAt:now,createdAt:now});
     await fb.set("logins/"+digits,{gen,uid:newUid});
-    if(oldUid&&oldUid!==newUid){try{await fb.del("people/"+oldUid)}catch(_){}}
+    if(oldUid&&oldUid!==newUid){
+      try{await fb.del("people/"+oldUid)}catch(_){}
+      try{const nd=await fb.get("notify/"+oldUid);if(nd){await fb.set("notify/"+newUid,nd);await fb.del("notify/"+oldUid);if(notifyMap){notifyMap[newUid]=nd.chatId;delete notifyMap[oldUid]}}}catch(_){}
+    }
     f.p.uid=newUid;f.p.phone=fmtPhone(digits);
     await saveStaff(f.dept);
     relinkTasks(pid,newUid);
@@ -714,6 +723,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     const f=findPerson(pid);if(!f||!f.p.uid)return;
     const digits=normPhone(f.p.phone), old=f.p.uid;
     await fb.del("people/"+old);
+    try{await fb.del("notify/"+old);if(notifyMap)delete notifyMap[old]}catch(_){}
     if(digits){try{const lg=await fb.get("logins/"+digits);await fb.set("logins/"+digits,{gen:(lg&&lg.gen)||0,uid:null})}catch(_){}}
     delete f.p.uid;
     await saveStaff(f.dept);
@@ -1163,19 +1173,20 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     <div class="dlg-f"><div class="r"><button class="btn" type="button" id="staffClose">Готово</button></div></div></div></dialog>`);
   $("#settingsBtn").insertAdjacentHTML("beforebegin",`<button class="btn" id="staffBtn" type="button" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.3-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.3 3.3 0 0 1 0 6.6M18 14.8c2 .7 3.2 2.4 3.6 5.2"/></svg>Працівники</button>`);
   const staffDlg=$("#staffDlg");
-  let staffForm=null, unlinked=[], pendingAssign=false, grantInfo=null, accBusy=false;
+  let staffForm=null, unlinked=[], pendingAssign=false, grantInfo=null, accBusy=false, staffQ="";
   const initials=n=>String(n||"?").trim().split(/\s+/).slice(0,2).map(w=>w[0]||"").join("").toUpperCase()||"?";
   function openStaff(opts){
     if(!isDir())return;
     staffForm=opts&&opts.newDept?{mode:"new",dept:opts.newDept}:null;
     pendingAssign=!!(opts&&opts.fromTask);
+    staffDlg.querySelector(".dlg").insertBefore($("#staffBody"),staffDlg.querySelector(".dlg-f"));
     renderStaff();
     try{staffDlg.showModal()}catch(e){staffDlg.setAttribute("open","")}
   }
   function closeStaff(){staffForm=null;pendingAssign=false;try{staffDlg.close()}catch(e){staffDlg.removeAttribute("open")}}
   $("#staffBtn").addEventListener("click",()=>openStaff(null));
   $("#staffClose").addEventListener("click",closeStaff);
-  staffDlg.addEventListener("close",()=>{staffForm=null;pendingAssign=false;grantInfo=null});
+  staffDlg.addEventListener("close",()=>{staffForm=null;pendingAssign=false;grantInfo=null;if(cabIs("staff")){$("#cabPanel").appendChild($("#staffBody"));renderStaff()}});
   function personForm(f){
     const ex=f.mode==="edit"?findPerson(f.pid):null;
     const p=ex?ex.p:{name:f.link?f.link.name:"",position:f.link?f.link.position:"",phone:"",note:""};
@@ -1201,14 +1212,15 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     const cnt=pid=>tasks.filter(t=>t.assignees.some(a=>a.pid===pid)).length;
     let html="";
     DEPTS.forEach(d=>{
-      const list=(staff[d.id]||[]).slice().sort((a,b)=>a.name.localeCompare(b.name,"uk"));
+      const q=staffQ.trim().toLowerCase();
+      const list=(staff[d.id]||[]).slice().sort((a,b)=>a.name.localeCompare(b.name,"uk")).filter(p=>!q||[p.name,p.position,p.phone,p.note].join(" ").toLowerCase().includes(q));
       const adding=staffForm&&staffForm.mode==="new"&&staffForm.dept===d.id;
       html+=`<section class="staff-sec"><div class="staff-h"><h3>${d.name} <span class="cnt">${list.length}</span></h3><button class="btn" type="button" data-pnew="${d.id}">+ Додати працівника</button></div>
         <div class="pgrid">${adding?personForm(staffForm):""}${list.map(p=>staffForm&&staffForm.mode==="edit"&&staffForm.pid===p.id?personForm(staffForm):
           `<article class="pcard"><div class="pc-top"><span class="avatar">${esc(initials(p.name))}</span><div class="pc-main"><b>${esc(p.name)}</b><span>${esc(p.position||"Посаду не вказано")}</span></div>
             <button class="btn ghost" type="button" data-pedit="${esc(p.id)}">Редагувати</button></div>
             ${p.phone||p.note?`<div class="pc-meta">${p.phone?`<span class="mono">${esc(p.phone)}</span>`:""}${p.note?`<span>${esc(p.note)}</span>`:""}</div>`:""}
-            <div class="pc-acc">${p.uid?`<span class="acc on">Доступ активний${p.head?" · керівник":""}</span><span class="acc-btns"><button class="btn ghost sm" type="button" data-preset="${esc(p.id)}">Скинути пароль</button><button class="btn ghost sm danger-t" type="button" data-prevoke="${esc(p.id)}">Закрити доступ</button></span>`
+            <div class="pc-acc">${p.uid?`<span class="acc on">Доступ активний${p.head?" · керівник":""}${notifyMap&&notifyMap[p.uid]?" · Telegram":""}</span><span class="acc-btns"><button class="btn ghost sm" type="button" data-preset="${esc(p.id)}">Скинути пароль</button><button class="btn ghost sm danger-t" type="button" data-prevoke="${esc(p.id)}">Закрити доступ</button></span>`
               :(normPhone(p.phone)?`<span class="acc">Доступу немає</span><button class="btn sm" type="button" data-pgrant="${esc(p.id)}">Надати доступ</button>`:`<span class="acc">Вкажіть телефон, щоб надати доступ</span>`)}</div>
             <div class="pc-foot">Задач: ${cnt(p.id)}</div></article>`).join("")}${!list.length&&!adding?'<p class="note">Карток ще немає.</p>':""}</div></section>`;
     });
@@ -1536,7 +1548,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       try{await tg("sendMessage",{chat_id:c,text,parse_mode:"HTML",disable_web_page_preview:true})}catch(e){}
     }
   }
-  function actorName(){return isDir()?"Директор":((me&&me.name)||"Працівник")}
+  function actorName(){return isDir()?dirName():((me&&me.name)||"Працівник")}
   function recipientsFor(t,exceptUid){
     const m=notifyMap||{}, out=[];
     t.assignees.forEach(a=>{if(a.uid&&a.uid!==exceptUid&&m[a.uid])out.push(m[a.uid])});
@@ -1772,6 +1784,177 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     const a=document.createElement("a");a.href=url;a.download="zadachi-"+(role||"")+"-"+today+".csv";document.body.appendChild(a);a.click();a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),2000);
   });
+
+
+  /* ---------- cabinet: profile and all settings on one page ---------- */
+  const IC={
+    profile:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.2 4-6.5 8-6.5s7 2.3 8 6.5"/></svg>',
+    staff:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.3-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.3 3.3 0 0 1 0 6.6M18 14.8c2 .7 3.2 2.4 3.6 5.2"/></svg>',
+    notify:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>',
+    templates:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/></svg>',
+    security:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>'
+  };
+  $("#logoutBtn").insertAdjacentHTML("beforebegin",`<button class="btn" id="cabBtn" type="button" hidden>${IC.profile}<span id="cabBtnTxt">Кабінет</span></button>`);
+  document.querySelector("#app > header").insertAdjacentHTML("afterend",`<section id="cabinet" class="cab" hidden aria-labelledby="cabTitle">
+    <div class="cab-top"><button class="btn ghost" type="button" id="cabBack">← До задач</button><h2 id="cabTitle">Кабінет</h2></div>
+    <div class="cab-grid"><nav class="cab-nav" id="cabNav" aria-label="Розділи кабінету"></nav><div class="cab-panel" id="cabPanel"></div></div>
+    <div id="cabStash" hidden></div></section>`);
+  const CAB_DIR=[{id:"profile",name:"Мій профіль"},{id:"staff",name:"Працівники й доступ"},{id:"notify",name:"Сповіщення"},{id:"templates",name:"Шаблони задач"},{id:"security",name:"Пароль і безпека"}];
+  const CAB_ME=[{id:"profile",name:"Мій профіль"},{id:"notify",name:"Сповіщення"},{id:"security",name:"Пароль"}];
+  const MOVABLE=["#staffBody","#notifyBody","#tplBody","#pwSet"];
+  const HIDE_IN_CAB=["#depts","#banner","#plans","#summary",".toolbar","#view","#director","#footNote","#addBtn","#copyBtn","#csvBtn"];
+  let cabTab=null;
+  function cabIs(t){const c=$("#cabinet");return !!c&&!c.hidden&&cabTab===t}
+  function openCabinet(tab){
+    if(!role)return;
+    if($("#cabinet").hidden){
+      HIDE_IN_CAB.forEach(sel=>{const el=document.querySelector(sel);if(el){el.dataset.cabWas=el.hidden?"1":"0";el.hidden=true}});
+      $("#cabinet").hidden=false;$("#cabBtn").classList.add("primary");
+    }
+    $("#cabTitle").textContent=isDir()?"Кабінет директора":"Мій кабінет";
+    showTab(tab||"profile");
+    try{window.scrollTo(0,0)}catch(e){}
+    if(!notifyMap||isDir())loadNotifyMap().then(()=>{if(cabIs("profile"))showTab("profile");else if(cabIs("staff")&&!staffForm)renderStaff()});
+  }
+  function closeCabinet(silent){
+    const c=$("#cabinet");if(!c||c.hidden)return;
+    stopLink();
+    MOVABLE.forEach(id=>{const el=$(id);if(el&&$("#cabPanel").contains(el))$("#cabStash").appendChild(el)});
+    c.hidden=true;cabTab=null;$("#cabBtn").classList.remove("primary");
+    HIDE_IN_CAB.forEach(sel=>{const el=document.querySelector(sel);if(el&&el.dataset.cabWas!==undefined){el.hidden=el.dataset.cabWas==="1";delete el.dataset.cabWas}});
+    if(!silent)render(true);
+  }
+  function stats(){
+    const ppl=DEPTS.flatMap(d=>(staff[d.id]||[]).map(p=>Object.assign({dept:d.id},p)));
+    const acc=ppl.filter(p=>p.uid), heads=acc.filter(p=>p.head), tgN=acc.filter(p=>notifyMap&&notifyMap[p.uid]).length;
+    const withPhone=ppl.filter(p=>normPhone(p.phone)).length;
+    return {ppl:ppl.length,acc:acc.length,heads:heads.length,tg:tgN,noPhone:ppl.length-withPhone,tasks:tasks.length,issues:tasks.filter(t=>overall(t)==="issue").length,over:tasks.filter(isOverdue).length};
+  }
+  const roleRows=`<div class="tablewrap roles-t"><table><thead><tr><th>Роль</th><th>Бачить</th><th>Може</th></tr></thead><tbody>
+    <tr><td><b>Директор</b></td><td>Усі задачі всіх підрозділів</td><td>Ставити й змінювати задачі, терміни, плани; керувати працівниками, доступами, шаблонами, сповіщеннями</td></tr>
+    <tr><td><b>Керівник підрозділу</b></td><td>Усі задачі свого підрозділу</td><td>Оновлювати статуси, готовність і записи працівників свого підрозділу</td></tr>
+    <tr><td><b>Працівник</b></td><td>Лише задачі, де він відповідальний</td><td>Свій статус, готовність, очікувану дату й записи</td></tr></tbody></table></div>`;
+  function profileHTML(){
+    const tgOn=isDir()?!!(notifyCfg&&notifyCfg.directorChat):!!(notifyMap&&me&&notifyMap[me.uid]);
+    const pwAt=isDir()?(vault&&vault.changedAt&&vault.changedAt.director):(me&&me.pwAt);
+    if(isDir()){
+      const pr=dirProfile(), st=stats();
+      return `<section class="cab-card"><div class="prof-h"><span class="avatar big">${esc(initials(pr.name||"Директор"))}</span><div class="pc-main"><b class="prof-name">${esc(pr.name||"Директор")}</b><span>${esc(pr.position||"Директор")} · повний доступ</span></div></div>
+        <form id="dirProfForm" class="grid3" autocomplete="off">
+          <div class="fl"><label for="dpName">ПІБ</label><input class="field" id="dpName" value="${esc(pr.name||"")}" placeholder="Прізвище Ім'я По батькові"></div>
+          <div class="fl"><label for="dpPos">Посада</label><input class="field" id="dpPos" value="${esc(pr.position||"Директор")}"></div>
+          <div class="fl"><label for="dpPhone">Контактний телефон</label><input class="field mono" id="dpPhone" type="tel" value="${esc(pr.phone||"")}" placeholder="+380 …"></div>
+          <div class="fl dp-save"><button class="btn primary" type="submit">Зберегти профіль</button></div>
+        </form>
+        <p class="note">Ім'я директора бачать працівники в записах і в Telegram-сповіщеннях. Вхід директора — за паролем директора.</p>
+        <div class="kv">
+          <span>Telegram</span><span>${tgOn?'<span class="acc on">Підключено</span>':'<span class="acc">Не підключено</span>'}</span><button class="btn ghost sm" type="button" data-cabgo="notify">Налаштувати</button>
+          <span>Пароль директора</span><span class="note">${pwAt?"змінено "+fmtStamp(pwAt):"ще не змінювався"}</span><button class="btn ghost sm" type="button" data-cabgo="security">Змінити</button>
+        </div></section>
+      <section class="cab-card"><h3 class="cab-h">Огляд</h3>
+        <div class="stats">
+          <button type="button" class="stat-s" data-cabgo="staff"><b>${st.ppl}</b>працівників у картках</button>
+          <button type="button" class="stat-s" data-cabgo="staff"><b>${st.acc}</b>мають доступ</button>
+          <button type="button" class="stat-s" data-cabgo="staff"><b>${st.heads}</b>керівників підрозділів</button>
+          <button type="button" class="stat-s" data-cabgo="staff"><b>${st.tg}</b>підключили Telegram</button>
+          <div class="stat-s"><b>${st.tasks}</b>задач усього</div>
+          <div class="stat-s ${st.issues?"warn":""}"><b>${st.issues}</b>з проблемою</div>
+        </div>
+        ${st.noPhone?`<p class="note">У ${st.noPhone} картках немає телефону — цим людям поки не можна надати доступ.</p>`:""}</section>
+      <section class="cab-card"><h3 class="cab-h">Ролі та права</h3>${roleRows}
+        <p class="note">Роль «Керівник підрозділу» вмикається галочкою в картці працівника.</p></section>`;
+    }
+    const roleTxt=me.head?"Керівник підрозділу":"Працівник";
+    return `<section class="cab-card"><div class="prof-h"><span class="avatar big">${esc(initials(me.name))}</span><div class="pc-main"><b class="prof-name">${esc(me.name||"")}</b><span>${esc(me.position||"")}</span></div></div>
+      <div class="kv">
+        <span>Підрозділ</span><span>${esc(deptName(me.dept))}</span><span></span>
+        <span>Роль</span><span>${esc(roleTxt)} — ${me.head?"бачите всі задачі підрозділу":"бачите задачі, де ви відповідальний"}</span><span></span>
+        <span>Логін</span><span class="mono">${esc(fmtPhone(me.phone))}</span><span></span>
+        <span>Telegram</span><span>${tgOn?'<span class="acc on">Підключено</span>':'<span class="acc">Не підключено</span>'}</span><button class="btn ghost sm" type="button" data-cabgo="notify">${tgOn?"Налаштувати":"Підключити"}</button>
+        <span>Пароль</span><span class="note">${pwAt?"змінено "+fmtStamp(pwAt):""}</span><button class="btn ghost sm" type="button" data-cabgo="security">Змінити</button>
+      </div>
+      <p class="note">ПІБ, посаду, підрозділ і роль змінює директор.</p></section>`;
+  }
+  function showTab(id){
+    stopLink();
+    const tabs=isDir()?CAB_DIR:CAB_ME;
+    if(!tabs.some(t=>t.id===id))id="profile";
+    cabTab=id;
+    $("#cabNav").innerHTML=tabs.map(t=>`<button type="button" class="cab-link" data-cab="${t.id}" ${t.id===id?'aria-current="page"':""}>${IC[t.id]}<span>${t.name}</span></button>`).join("");
+    const P=$("#cabPanel");
+    MOVABLE.forEach(sel=>{const el=$(sel);if(el&&P.contains(el))$("#cabStash").appendChild(el)});
+    P.innerHTML="";
+    if(id==="profile"){P.innerHTML=profileHTML()}
+    else if(id==="staff"){
+      P.innerHTML=`<div class="cab-h-row"><h3 class="cab-h">Працівники й доступ</h3><input class="field search" id="staffQ" type="search" placeholder="Пошук: ПІБ, посада, телефон" value="${esc(staffQ)}"></div>
+        <p class="note">Картка → телефон → «Надати доступ». Галочка «Керівник підрозділу» відкриває всі задачі підрозділу. Зміни ПІБ і посади одразу оновлюються в усіх задачах.</p>`;
+      P.appendChild($("#staffBody"));staffForm=null;grantInfo=grantInfo||null;renderStaff();
+    }
+    else if(id==="notify"){P.innerHTML=`<h3 class="cab-h">Сповіщення в Telegram</h3>`;P.appendChild($("#notifyBody"));renderNotify()}
+    else if(id==="templates"){P.innerHTML=`<h3 class="cab-h">Шаблони задач</h3><p class="note">Готові набори задач. Додаються лише ті, яких ще немає; наявні задачі й звіти не змінюються.</p>`;P.appendChild($("#tplBody"));renderTpl()}
+    else if(id==="security"){
+      P.innerHTML=`<h3 class="cab-h">${isDir()?"Пароль і безпека":"Пароль"}</h3><p class="note">${isDir()?"Пароль директора відкриває ключі шифрування всіх даних: не втрачайте його. Паролі працівників скидаються в розділі «Працівники й доступ».":"Мінімум 8 символів, літери й цифри. Після зміни на інших пристроях потрібно буде увійти знову."}</p>`;
+      P.appendChild($("#pwSet"));renderPwSet();
+    }
+  }
+  $("#cabBtn").addEventListener("click",()=>{if($("#cabinet").hidden)openCabinet("profile");else closeCabinet()});
+  $("#cabBack").addEventListener("click",()=>closeCabinet());
+  $("#cabNav").addEventListener("click",e=>{const b=e.target.closest("[data-cab]");if(b){showTab(b.dataset.cab);if(b.dataset.cab==="staff"||b.dataset.cab==="profile")loadNotifyMap().then(()=>{if(cabIs("staff")&&!staffForm)renderStaff()})}});
+  $("#cabPanel").addEventListener("click",e=>{const b=e.target.closest("[data-cabgo]");if(b)showTab(b.dataset.cabgo)});
+  $("#cabPanel").addEventListener("input",e=>{if(e.target.id==="staffQ"){staffQ=e.target.value;if(!staffForm)renderStaff()}});
+  $("#cabPanel").addEventListener("submit",async e=>{
+    if(e.target.id!=="dirProfForm")return;
+    e.preventDefault();if(!isDir())return;
+    let ph=$("#dpPhone").value.trim();
+    if(ph){const d=normPhone(ph);if(!d){toast("Невірний номер телефону.");return}ph=fmtPhone(d)}
+    const profile={name:$("#dpName").value.trim(),position:$("#dpPos").value.trim()||"Директор",phone:ph};
+    try{await fb.merge("settings/vault",{profile});vault=Object.assign({},vault,{profile});$("#whoBadge").textContent=profile.name||"Директор";toast("Профіль збережено");showTab("profile")}catch(ex){writeErr(ex)}
+  });
+  (function(){
+    const st=document.createElement("style");
+    st.textContent=`.cab{display:flex;flex-direction:column;gap:14px}
+.cab-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.cab-top h2{font-family:var(--font-display);font-size:clamp(17px,2.4vw,21px);margin:0;font-weight:500}
+.cab-grid{display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px;align-items:start}
+.cab-nav{display:flex;flex-direction:column;gap:4px;position:sticky;top:calc(12px + env(safe-area-inset-top,0px));background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:8px}
+.cab-link{display:flex;gap:10px;align-items:center;border:0;background:none;border-radius:8px;padding:10px 12px;font-weight:600;color:var(--muted);text-align:left;font-size:13.5px}
+.cab-link svg{width:18px;height:18px;flex:none}
+.cab-link:hover{color:var(--fg);background:var(--surface-2)}
+.cab-link[aria-current="page"]{background:var(--accent-soft);color:var(--fg)}
+.cab-link[aria-current="page"] svg{color:var(--accent)}
+.cab-panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;box-shadow:var(--shadow)}
+.cab-panel .staff-body,.cab-panel .tpl-body{max-height:none;overflow:visible;padding-right:0}
+.cab-panel>.note{margin:0;max-width:75ch}
+.cab-h{margin:0;font-family:var(--font-display);font-size:15px;font-weight:500}
+.cab-h-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.cab-h-row .search{flex:0 1 320px}
+.cab-card{border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px}
+.prof-h{display:flex;gap:14px;align-items:center}
+.avatar.big{width:58px;height:58px;font-size:19px}
+.prof-name{font-family:var(--font-display);font-weight:500;font-size:17px;white-space:normal!important}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end}
+.dp-save{grid-column:1/-1;align-items:flex-start}
+.kv{display:grid;grid-template-columns:minmax(110px,170px) minmax(0,1fr) auto;gap:10px 14px;align-items:center;font-size:13.5px;border-top:1px solid var(--line);padding-top:12px}
+.kv>span:nth-child(3n+1){color:var(--muted);font-weight:600}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.stat-s{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface-2);text-align:left;font-size:12.5px;color:var(--muted);font-weight:600}
+button.stat-s:hover{border-color:var(--accent)}
+.stat-s b{display:block;font-family:var(--font-mono);font-size:22px;color:var(--fg);font-weight:500}
+.stat-s.warn b{color:var(--issue)}
+.roles-t table{min-width:560px}
+.roles-t td{font-size:13px}
+#cabBtn.primary svg{color:var(--accent-ink)}
+@media (max-width:760px){
+  .cab-grid{grid-template-columns:minmax(0,1fr)}
+  .cab-nav{flex-direction:row;overflow-x:auto;position:static;padding:6px}
+  .cab-link{white-space:nowrap;padding:8px 10px}
+  .cab-panel{padding:14px}
+  .grid3{grid-template-columns:1fr}
+  .kv{grid-template-columns:minmax(0,1fr) auto}
+  .kv>span:nth-child(3n+1){grid-column:1/-1;margin-bottom:-6px}
+}`;
+    document.head.appendChild(st);
+  })();
 
   if(!(window.crypto&&crypto.subtle)){$("#loginErr").textContent="Цей браузер не підтримує шифрування. Відкрийте сайт через https у сучасному браузері.";}
 };
