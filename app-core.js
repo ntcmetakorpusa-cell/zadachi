@@ -996,15 +996,24 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       return list.length?`<optgroup label="${d.name}">${list.map(p=>`<option value="${esc(p.id)}" ${p.id===sel?"selected":""}>${esc(p.name)}${p.position?" — "+esc(p.position):""}</option>`).join("")}</optgroup>`:"";
     }).join("");
   }
-  function personSelectInner(sel,manual){
-    return `<option value="">— оберіть працівника —</option>${personOptions(sel)}<option value="__manual" ${manual?"selected":""}>Вписати вручну…</option>`;
+  function positionsFor(d){
+    const carded=new Set((staff[d]||[]).map(p=>p.position).filter(Boolean));
+    const fromTasks=tasks.flatMap(t=>t.assignees.filter(a=>a.dept===d&&!(a.pid&&findPerson(a.pid))).map(a=>a.position));
+    return [...new Set((DEFAULT_POS[d]||[]).concat(fromTasks).filter(Boolean))].filter(x=>!carded.has(x)||fromTasks.includes(x)).sort((a,b)=>a.localeCompare(b,"uk"));
+  }
+  function positionOptions(selPos){
+    return DEPTS.map(d=>{const list=positionsFor(d.id);return list.length?`<optgroup label="${d.name} — посада (без картки)">${list.map(x=>{const v="pos::"+d.id+"::"+x;return `<option value="${esc(v)}" ${v===selPos?"selected":""}>${esc(x)}</option>`}).join("")}</optgroup>`:""}).join("");
+  }
+  function personSelectInner(sel,manual,selPos){
+    return `<option value="">— оберіть працівника або посаду —</option>${personOptions(sel)}${positionOptions(selPos||"")}<option value="__manual" ${manual&&!selPos?"selected":""}>Вписати вручну…</option>`;
   }
   function asgRow(a){
     const linked=!!(a.pid&&findPerson(a.pid)), manual=!linked&&!!(a.position||a.name), d=a.dept||"vyrobnytstvo";
+    const selPos=manual&&!a.name&&a.position&&positionsFor(d).includes(a.position)?"pos::"+d+"::"+a.position:"";
     return `<div class="asg-row2" data-aid="${esc(a.id)}">
-      <div class="asg-pick"><select class="field a-person" aria-label="Працівник">${personSelectInner(linked?a.pid:"",manual)}</select>
+      <div class="asg-pick"><select class="field a-person" aria-label="Працівник або посада">${personSelectInner(linked?a.pid:"",manual,selPos)}</select>
         <button class="btn ghost a-del" type="button" aria-label="Прибрати відповідального">✕</button></div>
-      <div class="asg-manual" ${manual?"":"hidden"}>
+      <div class="asg-manual" ${manual&&!selPos?"":"hidden"}>
         <select class="field a-dept" aria-label="Підрозділ">${DEPTS.map(x=>`<option value="${x.id}" ${x.id===d?"selected":""}>${x.name}</option>`).join("")}</select>
         <input class="field a-pos" list="pos-${d}" value="${esc(a.position||"")}" placeholder="Посада" aria-label="Посада">
         <input class="field a-name" list="nm-${d}" value="${esc(a.name||"")}" placeholder="ПІБ (буде створено картку)" aria-label="ПІБ">
@@ -1018,9 +1027,10 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     const rows=l.querySelectorAll(".asg-row2");return rows[rows.length-1];
   }
   function refreshPersonSelects(){
-    $("#asgList").querySelectorAll(".a-person").forEach(sel=>{const v=sel.value;sel.innerHTML=personSelectInner(v==="__manual"?"":v,v==="__manual");if(v&&v!=="__manual"&&findPerson(v))sel.value=v});
+    $("#asgList").querySelectorAll(".a-person").forEach(sel=>{const v=sel.value;const isPos=v.startsWith("pos::");sel.innerHTML=personSelectInner(v==="__manual"||isPos?"":v,v==="__manual",isPos?v:"");if(v&&!isPos&&v!=="__manual"&&findPerson(v))sel.value=v});
   }
   $("#asgAdd").addEventListener("click",()=>{const r=addAsgRow();r.querySelector(".a-person").focus()});
+  { const hn=document.querySelector("#asgEditor .note"); if(hn)hn.textContent="Учасників можна додати скільки завгодно, з різних підрозділів. У списку — працівники з картками й усі посади; якщо потрібної людини немає, натисніть «+ Нова картка працівника»."; }
   $("#asgAdd").insertAdjacentHTML("afterend",' <button class="btn ghost" type="button" id="asgNewPerson">+ Нова картка працівника</button>');
   $("#asgNewPerson").addEventListener("click",()=>openStaff({newDept:$("#iDept").value,fromTask:true}));
   $("#asgList").addEventListener("click",e=>{if(e.target.closest(".a-del")){e.target.closest(".asg-row2").remove();renderAsgEmpty()}});
@@ -1029,7 +1039,8 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     const man=row.querySelector(".asg-manual");
     if(e.target.classList.contains("a-person")){
       const v=e.target.value;
-      if(v==="__manual"){man.hidden=false;row.querySelector(".a-name").focus()}
+      if(v.startsWith("pos::")){const parts=v.split("::");man.hidden=true;row.querySelector(".a-dept").value=parts[1];row.querySelector(".a-pos").value=parts.slice(2).join("::");row.querySelector(".a-name").value=""}
+      else if(v==="__manual"){man.hidden=false;row.querySelector(".a-name").focus()}
       else{man.hidden=true;const f=findPerson(v);if(f){row.querySelector(".a-dept").value=f.dept;row.querySelector(".a-pos").value=f.p.position;row.querySelector(".a-name").value=f.p.name}}
     }
     if(e.target.classList.contains("a-dept")){const d=e.target.value;row.querySelector(".a-pos").setAttribute("list","pos-"+d);row.querySelector(".a-name").setAttribute("list","nm-"+d)}
@@ -1146,6 +1157,7 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
       const list=[];
       $("#asgList").querySelectorAll(".asg-row2").forEach(r=>{
         const v=r.querySelector(".a-person").value;
+        if(v.startsWith("pos::")){const parts=v.split("::");list.push({id:r.dataset.aid,dept:parts[1],position:parts.slice(2).join("::"),name:""});return}
         if(v&&v!=="__manual"){const f=findPerson(v);if(f)list.push(Object.assign({id:r.dataset.aid,pid:v,dept:f.dept,position:f.p.position,name:f.p.name},f.p.uid?{uid:f.p.uid}:{}));return}
         if(v!=="__manual")return;
         const pos=r.querySelector(".a-pos").value.trim(), name=r.querySelector(".a-name").value.trim();
@@ -1329,11 +1341,13 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
 .pcard{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--surface);display:flex;flex-direction:column;gap:8px;min-width:0}
 .pcard.dashed{border-style:dashed;background:var(--surface-2)}
 .pform{grid-column:1/-1;border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-.pc-top{display:flex;gap:10px;align-items:center}
+.pc-top{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.pc-top>.btn{margin-left:auto}
 .avatar{width:38px;height:38px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none;letter-spacing:.02em}
 .pc-main{display:flex;flex-direction:column;min-width:0;flex:1}
-.pc-main b{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pc-main span{font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc-main{flex:1 1 170px}
+.pc-main b{font-weight:700;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
+.pc-main span{font-size:12.5px;color:var(--muted);white-space:normal;overflow-wrap:anywhere;line-height:1.35}
 .pc-meta{display:flex;flex-direction:column;gap:2px;font-size:12.5px;color:var(--muted)}
 .pc-foot{font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:6px}
 .pc-acc{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
