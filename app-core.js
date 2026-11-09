@@ -158,6 +158,40 @@ tr.row:focus-visible td{outline:none;background:color-mix(in srgb,var(--accent-s
     if(!document.querySelector(".brand-water"))document.body.insertAdjacentHTML("afterbegin",`<svg class="brand-water" viewBox="0 0 41 40" aria-hidden="true"><path d="${GEAR_D}"/></svg>`);
   })();
 
+  /* ---------- show/hide password ("eye") for every password field, including ones rendered later ---------- */
+  (function(){
+    const EYE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+    const EYE_OFF='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-2.6 3.5M6.6 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7c1.8 0 3.4-.5 4.8-1.3"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/></svg>';
+    const st=document.createElement("style");
+    st.textContent=`.pw-wrap{position:relative;display:block;min-width:0;flex:0 0 auto}
+.pwrow>.pw-wrap{flex:1 1 220px}
+.pw-wrap>input{width:100%;padding-right:42px}
+.pw-eye{position:absolute;top:50%;right:4px;transform:translateY(-50%);width:34px;height:34px;display:grid;place-items:center;border:0;background:none;border-radius:6px;color:var(--muted);padding:0}
+.pw-eye:hover{color:var(--fg);background:var(--surface-2)}
+.pw-eye svg{width:18px;height:18px}
+.pw-eye[aria-pressed="true"]{color:var(--accent)}`;
+    document.head.appendChild(st);
+    function enhance(root){
+      (root.querySelectorAll?root.querySelectorAll('input[type="password"]:not([data-eye])'):[]).forEach(inp=>{
+        inp.dataset.eye="1";
+        const w=document.createElement("span");w.className="pw-wrap";
+        inp.parentNode.insertBefore(w,inp);w.appendChild(inp);
+        const b=document.createElement("button");b.type="button";b.className="pw-eye";b.tabIndex=0;
+        b.setAttribute("aria-label","Показати пароль");b.setAttribute("aria-pressed","false");b.innerHTML=EYE;
+        b.addEventListener("click",()=>{
+          const show=inp.type==="password";inp.type=show?"text":"password";
+          b.setAttribute("aria-pressed",String(show));b.setAttribute("aria-label",show?"Сховати пароль":"Показати пароль");b.innerHTML=show?EYE_OFF:EYE;
+          try{inp.focus();const n=inp.value.length;inp.setSelectionRange(n,n)}catch(e){}
+        });
+        w.appendChild(b);
+      });
+    }
+    enhance(document);
+    try{new MutationObserver(ms=>{for(const m of ms)for(const n of m.addedNodes)if(n.nodeType===1){if(n.matches&&n.matches('input[type="password"]'))enhance(n.parentNode);else enhance(n)}}).observe(document.body,{childList:true,subtree:true})}catch(e){}
+    /* hide typed passwords again whenever a form is submitted */
+    document.addEventListener("submit",e=>{e.target.querySelectorAll&&e.target.querySelectorAll('input[data-eye]').forEach(i=>{if(i.type==="text"){i.type="password";const b=i.parentNode.querySelector(".pw-eye");if(b){b.setAttribute("aria-pressed","false");b.setAttribute("aria-label","Показати пароль");b.innerHTML=EYE}}})},true);
+  })();
+
   /* ---------- crypto ---------- */
   const TE=new TextEncoder(), TD=new TextDecoder();
   function b64(buf){const a=new Uint8Array(buf);let s="";for(let i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);return btoa(s)}
